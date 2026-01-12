@@ -345,7 +345,23 @@ Claude Code の Hooks 機能と組み合わせて、自動的に Slack 通知を
 
 ```json
 {
+  "permissions": {
+    "allow": [
+      "Bash(npx slack-thread-mcp *)",
+      "Bash(npx slack-notify *)"
+    ]
+  },
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -f \"${CLAUDE_PROJECT_DIR}/.env\" ]; then set -a && source \"${CLAUDE_PROJECT_DIR}/.env\" && set +a && env | grep -E '^SLACK_|^THREAD_STATE_PATH=' >> \"$CLAUDE_ENV_FILE\"; fi"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
@@ -359,6 +375,11 @@ Claude Code の Hooks 機能と組み合わせて、自動的に Slack 通知を
   }
 }
 ```
+
+**ポイント:**
+- `SessionStart` フックでプロジェクトの `.env` ファイルを読み込み、環境変数をセッション全体で利用可能にします
+- `Stop` フックでセッション終了時に完了通知を送信します
+- `.env` ファイルには `SLACK_BOT_TOKEN`、`SLACK_DEFAULT_CHANNEL`、`THREAD_STATE_PATH` などを設定してください
 
 ## 開発
 

@@ -1,6 +1,7 @@
 {
   "_comment": "Claude Code settings.json / settings.local.json の設定例",
   "_usage": "このファイルの内容を .claude/settings.json または .claude/settings.local.json にコピーしてください",
+  "_env_note": ".env ファイルは SessionStart フックで読み込まれます。プロジェクトルートに .env を配置してください",
   "permissions": {
     "allow": [
       "Bash(npx slack-thread-mcp *)",
@@ -9,6 +10,16 @@
     ]
   },
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -f \"${CLAUDE_PROJECT_DIR}/.env\" ]; then set -a && source \"${CLAUDE_PROJECT_DIR}/.env\" && set +a && env | grep -E '^SLACK_|^THREAD_STATE_PATH=' >> \"$CLAUDE_ENV_FILE\"; fi"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
