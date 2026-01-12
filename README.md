@@ -348,9 +348,11 @@ Claude Code の Hooks 機能と組み合わせて、自動的に Slack 通知を
   "hooks": {
     "Stop": [
       {
-        "matcher": "",
         "hooks": [
-          "npx slack-thread-mcp complete --job-id=${CLAUDE_SESSION_ID:-default} --summary=\"Session completed\" --mention=false"
+          {
+            "type": "command",
+            "command": "npx slack-thread-mcp complete --job-id=${CLAUDE_SESSION_ID:-default} --summary=\"Session completed\" --mention=false"
+          }
         ]
       }
     ]

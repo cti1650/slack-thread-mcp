@@ -9,12 +9,13 @@
     ]
   },
   "hooks": {
-    "_comment_hooks": "以下はHooksの設定例です。必要に応じてカスタマイズしてください",
     "Stop": [
       {
-        "matcher": "",
         "hooks": [
-          "npx slack-thread-mcp complete --job-id=${CLAUDE_SESSION_ID:-default} --summary=\"Session completed\" --mention=false"
+          {
+            "type": "command",
+            "command": "npx slack-thread-mcp complete --job-id=${CLAUDE_SESSION_ID:-default} --summary=\"Session completed\" --mention=false"
+          }
         ]
       }
     ]
