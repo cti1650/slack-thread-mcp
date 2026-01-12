@@ -19,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -f \"${CLAUDE_PROJECT_DIR}/.env\" ]; then set -a && source \"${CLAUDE_PROJECT_DIR}/.env\" && set +a && env | grep -E '^SLACK_|^THREAD_STATE_PATH=' >> \"$CLAUDE_ENV_FILE\"; fi"
+            "command": "SESSION_ID=$(cat | jq -r '.session_id // empty'); if [ -n \"$SESSION_ID\" ]; then echo \"CLAUDE_SESSION_ID=$SESSION_ID\" >> \"$CLAUDE_ENV_FILE\"; fi; if [ -f \"${CLAUDE_PROJECT_DIR}/.env\" ]; then set -a && source \"${CLAUDE_PROJECT_DIR}/.env\" && set +a && env | grep -E '^SLACK_|^THREAD_STATE_PATH=' >> \"$CLAUDE_ENV_FILE\"; fi"
           }
         ]
       }
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx slack-thread-mcp start --job-id=${CLAUDE_SESSION_ID:-default} --title=\"Claude Code Task\""
+            "command": "npx slack-thread-mcp start --job-id=${CLAUDE_SESSION_ID:-$(uuidgen)} --title=\"Claude Code Task\""
           }
         ]
       }
@@ -40,7 +40,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx slack-thread-mcp update --job-id=${CLAUDE_SESSION_ID:-default} --message=\"Tool: ${CLAUDE_TOOL_NAME}\""
+            "command": "TOOL_NAME=$(cat | jq -r '.tool_name // \"unknown\"'); npx slack-thread-mcp update --job-id=${CLAUDE_SESSION_ID:-default} --message=\"Tool: $TOOL_NAME\""
           }
         ]
       }
@@ -51,7 +51,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx slack-thread-mcp waiting --job-id=${CLAUDE_SESSION_ID:-default} --reason=\"権限確認待ち: ${CLAUDE_TOOL_NAME}\""
+            "command": "TOOL_NAME=$(cat | jq -r '.tool_name // \"unknown\"'); npx slack-thread-mcp waiting --job-id=${CLAUDE_SESSION_ID:-default} --reason=\"権限確認待ち: $TOOL_NAME\""
           }
         ]
       }
