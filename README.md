@@ -39,7 +39,30 @@ Claude Code / Claude Desktop から Slack スレッドに進捗通知を送信�
 - `SLACK_MENTION_USER_IDS` と `SLACK_MENTION_GROUP_ID` が両方とも未指定の場合: `@channel` でチャンネル全体にメンション
 - いずれかを指定した場合: 指定されたユーザー/グループのみにメンション
 
-### 3. Claude Desktop への組み込み
+### 3. Claude Code (CLI) への組み込み
+
+```bash
+claude mcp add slack-thread -s user -- npx -y github:cti1650/slack-thread-mcp
+
+# 環境変数を設定（~/.claude/.env に追加するか、シェルの環境変数として設定）
+export SLACK_BOT_TOKEN="xoxb-your-token"
+export SLACK_DEFAULT_CHANNEL="C0123456789"
+```
+
+または、環境変数を含めてワンライナーで追加：
+
+```bash
+claude mcp add slack-thread -s user \
+  -e SLACK_BOT_TOKEN=xoxb-your-token \
+  -e SLACK_DEFAULT_CHANNEL=C0123456789 \
+  -- npx -y github:cti1650/slack-thread-mcp
+```
+
+**スコープオプション:**
+- `-s user`: ユーザー全体で有効
+- `-s project`: 現在のプロジェクトのみで有効
+
+### 4. Claude Desktop への組み込み
 
 `claude_desktop_config.json` に以下を追加:
 
@@ -51,7 +74,7 @@ Claude Code / Claude Desktop から Slack スレッドに進捗通知を送信�
   "mcpServers": {
     "slack-thread": {
       "command": "npx",
-      "args": ["github:cti1650/slack-thread-mcp"],
+      "args": ["-y", "github:cti1650/slack-thread-mcp"],
       "env": {
         "SLACK_BOT_TOKEN": "xoxb-your-token",
         "SLACK_DEFAULT_CHANNEL": "C0123456789",
