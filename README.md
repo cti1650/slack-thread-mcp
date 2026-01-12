@@ -1,11 +1,14 @@
-# Slack Thread Progress Notifier MCP
+# Slack Thread Progress Notifier
 
-Claude Code / Claude Desktop から Slack スレッドに進捗通知を送信する MCP サーバーです。
+Claude Code / Claude Desktop から Slack スレッドに進捗通知を送信するツールです。
+
+**MCP サーバー** と **CLI** の2つの方法で利用できます。
 
 1つのジョブ（指示）につき1つの Slack スレッドを作成し、開始・進捗・完了/失敗通知を同一スレッドに集約します。
 
 ## 特徴
 
+- **2つの利用方法**: MCP サーバーまたは CLI から利用可能
 - **スレッド集約**: 1ジョブ = 1スレッドで通知をまとめる
 - **メンションポリシー**: 完了/失敗/待機時にメンション（進捗ではメンションしない）
   - デフォルトは `@channel` でチャンネル全体に通知
@@ -249,6 +252,112 @@ S3バケットの作成に失敗しました
 @channel
 ```
 
+## CLI 利用方法
+
+MCP サーバーの代わりに CLI から直接 Slack に通知を送信できます。Claude Code の Hooks や Bash ツールから呼び出す場合に便利です。
+
+### CLI コマンド
+
+```bash
+# スレッド作成
+npx slack-thread-mcp start --job-id=<id> --title="タスク名"
+
+# 進捗更新
+npx slack-thread-mcp update --job-id=<id> --message="進捗メッセージ"
+
+# 待機通知
+npx slack-thread-mcp waiting --job-id=<id> --reason="権限確認待ち"
+
+# 完了通知
+npx slack-thread-mcp complete --job-id=<id> --summary="完了サマリ"
+
+# 失敗通知
+npx slack-thread-mcp fail --job-id=<id> --error="エラー内容"
+
+# ヘルプ
+npx slack-thread-mcp help
+```
+
+### CLI オプション
+
+| オプション | 説明 |
+|-----------|------|
+| `--job-id=<id>` | ジョブID（必須） |
+| `--title=<title>` | ジョブタイトル（start時必須） |
+| `--message=<msg>` | 進捗メッセージ（update時必須） |
+| `--level=<level>` | メッセージレベル: info, warn, debug（デフォルト: info） |
+| `--reason=<reason>` | 待機理由（waiting時） |
+| `--summary=<text>` | 完了サマリ（complete時） |
+| `--error=<text>` | エラー概要（fail時必須） |
+| `--logs-hint=<text>` | ログのヒント（fail時） |
+| `--channel=<ch>` | チャンネルを上書き |
+| `--mention=<bool>` | メンションの有効/無効（デフォルト: true） |
+| `--meta=<json>` | 追加メタデータ（JSON形式、start時） |
+| `--thread-ts=<ts>` | スレッドタイムスタンプ（job_idでスレッドが見つからない場合） |
+
+### 環境変数の設定（CLI用）
+
+CLI は以下の優先順位で設定を読み込みます:
+
+1. 環境変数
+2. カレントディレクトリの `.env` ファイル
+3. グローバル設定ファイル (`~/.config/slack-thread-mcp/config.json` または `~/.slack-thread-mcp.json`)
+
+**`.env` ファイルの例:**
+
+```bash
+SLACK_BOT_TOKEN=xoxb-your-bot-token
+SLACK_DEFAULT_CHANNEL=C0123456789
+THREAD_STATE_PATH=~/.local/share/slack-thread-mcp/threads.json
+```
+
+**グローバル設定ファイルの例:**
+
+```json
+{
+  "slackBotToken": "xoxb-your-bot-token",
+  "slackDefaultChannel": "C0123456789",
+  "slackMentionUserIds": ["U0123456789"],
+  "threadStatePath": "~/.local/share/slack-thread-mcp/threads.json"
+}
+```
+
+### Claude Code での CLI 許可設定
+
+`.claude/settings.local.json` に以下を追加して、確認なしで CLI を実行できるようにします:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx slack-thread-mcp *)",
+      "Bash(npx slack-notify *)"
+    ]
+  }
+}
+```
+
+### Claude Code Hooks での利用
+
+Claude Code の Hooks 機能と組み合わせて、自動的に Slack 通知を送信できます。
+
+**設定例 (`.claude/settings.json`):**
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          "npx slack-thread-mcp complete --job-id=${CLAUDE_SESSION_ID:-default} --summary=\"Session completed\" --mention=false"
+        ]
+      }
+    ]
+  }
+}
+```
+
 ## 開発
 
 ```bash
@@ -258,8 +367,11 @@ npm install
 # ビルド
 npm run build
 
-# 実行
+# MCP サーバーとして実行
 npm start
+
+# CLI として実行
+npm run cli -- help
 ```
 
 ## ライセンス

@@ -1,15 +1,19 @@
 {
   "name": "slack-thread-mcp",
-  "version": "0.1.0",
-  "description": "MCP server for Slack thread-based progress notifications",
+  "version": "0.2.0",
+  "description": "MCP server and CLI for Slack thread-based progress notifications",
   "type": "module",
-  "bin": "./build/index.js",
+  "bin": {
+    "slack-thread-mcp": "./build/cli.js",
+    "slack-notify": "./build/cli.js"
+  },
   "files": [
     "build"
   ],
   "scripts": {
     "build": "tsc",
-    "start": "node build/index.js"
+    "start": "node build/index.js",
+    "cli": "node build/cli.js"
   },
   "keywords": [
     "mcp",

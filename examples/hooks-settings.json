@@ -1,0 +1,22 @@
+{
+  "_comment": "Claude Code settings.json / settings.local.json の設定例",
+  "_usage": "このファイルの内容を .claude/settings.json または .claude/settings.local.json にコピーしてください",
+  "permissions": {
+    "allow": [
+      "Bash(npx slack-thread-mcp *)",
+      "Bash(npx slack-notify *)",
+      "Bash(node build/cli.js *)"
+    ]
+  },
+  "hooks": {
+    "_comment_hooks": "以下はHooksの設定例です。必要に応じてカスタマイズしてください",
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          "npx slack-thread-mcp complete --job-id=${CLAUDE_SESSION_ID:-default} --summary=\"Session completed\" --mention=false"
+        ]
+      }
+    ]
+  }
+}

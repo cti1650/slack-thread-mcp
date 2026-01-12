@@ -1,0 +1,12 @@
+{
+  "_comment": "グローバル設定ファイルの例",
+  "_placement": "~/.config/slack-thread-mcp/config.json または ~/.slack-thread-mcp.json に配置",
+  "_priority": "環境変数 > .envファイル > このグローバル設定",
+
+  "slackBotToken": "xoxb-your-bot-token",
+  "slackDefaultChannel": "C0123456789",
+  "slackMentionUserIds": ["U0123456789"],
+  "slackMentionGroupId": "",
+  "slackPostPrefix": "[Claude Code]",
+  "threadStatePath": "~/.local/share/slack-thread-mcp/threads.json"
+}
