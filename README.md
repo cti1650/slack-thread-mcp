@@ -1,4 +1,4 @@
-# Slack Thread Progress Notifier
+# Slack Thread Progress Notifier（作成中）
 
 Claude Code / Claude Desktop から Slack スレッドに進捗通知を送信するツールです。
 
