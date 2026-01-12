@@ -24,8 +24,12 @@ export function slackThreadTools(
         .record(z.unknown())
         .optional()
         .describe("追加情報（repo名、branch、cwdなど）"),
+      mention: z
+        .boolean()
+        .optional()
+        .describe("メンションを行うか（デフォルト: true）"),
     }),
-    execute: async ({ job_id, title, channel, meta }) => {
+    execute: async ({ job_id, title, channel, meta, mention }) => {
       // 冪等性: 既存のジョブがあれば再利用
       const existing = threadStore.get(job_id);
       if (existing) {
@@ -50,7 +54,8 @@ export function slackThreadTools(
       const result = await slackClient.postParentMessage(
         targetChannel,
         title,
-        meta
+        meta,
+        mention !== false
       );
 
       if (!result.ok) {
@@ -89,6 +94,10 @@ export function slackThreadTools(
     parameters: z.object({
       job_id: z.string().describe("ジョブの一意識別子"),
       message: z.string().describe("進捗メッセージ"),
+      thread_ts: z
+        .string()
+        .optional()
+        .describe("スレッドのタイムスタンプ（job_idでスレッドが見つからない場合に使用）"),
       level: z
         .enum(["info", "warn", "debug"])
         .optional()
@@ -102,13 +111,18 @@ export function slackThreadTools(
         .optional()
         .describe("権限確認待ち通知までの時間（ミリ秒、デフォルト: 30000）"),
     }),
-    execute: async ({ job_id, message, level, enable_waiting_monitor, waiting_timeout_ms }) => {
+    execute: async ({ job_id, message, thread_ts, level, enable_waiting_monitor, waiting_timeout_ms }) => {
       const state = threadStore.get(job_id);
-      if (!state) {
-        throw new Error(`ジョブが見つかりません: ${job_id}`);
+
+      // thread_ts が指定されていればそちらを優先、なければ state から取得
+      const targetThreadTs = thread_ts || state?.threadTs;
+      const targetChannel = state?.channel || slackClient.getDefaultChannel();
+
+      if (!targetThreadTs) {
+        throw new Error(`スレッドが見つかりません: job_id=${job_id}, thread_ts=${thread_ts}`);
       }
 
-      if (threadStore.isTerminal(job_id)) {
+      if (state && threadStore.isTerminal(job_id)) {
         return {
           content: [
             {
@@ -125,14 +139,16 @@ export function slackThreadTools(
       // 前回の監視をキャンセル
       slackClient.cancelWaitingMonitor(job_id);
 
-      threadStore.updateStatus(job_id, "in_progress");
+      if (state) {
+        threadStore.updateStatus(job_id, "in_progress");
+      }
 
       // debounce処理（即時実行版）
       // 実際のdebounceはthreadStoreのscheduleUpdateで可能だが、
       // MCPツールは同期的に結果を返す必要があるため、ここでは即時投稿
       const result = await slackClient.postThreadReply(
-        state.channel,
-        state.threadTs,
+        targetChannel,
+        targetThreadTs,
         message,
         level || "info"
       );
@@ -141,8 +157,8 @@ export function slackThreadTools(
       if (enable_waiting_monitor !== false) {
         slackClient.startWaitingMonitor(
           job_id,
-          state.channel,
-          state.threadTs,
+          targetChannel,
+          targetThreadTs,
           waiting_timeout_ms
         );
       }
@@ -165,6 +181,10 @@ export function slackThreadTools(
       "処理が一時停止していることを通知します。権限確認やユーザー入力待ちの際に使用してください。",
     parameters: z.object({
       job_id: z.string().describe("ジョブの一意識別子"),
+      thread_ts: z
+        .string()
+        .optional()
+        .describe("スレッドのタイムスタンプ（job_idでスレッドが見つからない場合に使用）"),
       reason: z
         .string()
         .optional()
@@ -174,13 +194,19 @@ export function slackThreadTools(
         .optional()
         .describe("メンションを行うか（デフォルト: true）"),
     }),
-    execute: async ({ job_id, reason, mention }) => {
+    execute: async ({ job_id, thread_ts, reason, mention }) => {
       const state = threadStore.get(job_id);
-      if (!state) {
-        throw new Error(`ジョブが見つかりません: ${job_id}`);
+
+      // thread_ts が指定されていればそちらを優先、なければ state から取得
+      const targetThreadTs = thread_ts || state?.threadTs;
+      const targetChannel = state?.channel || slackClient.getDefaultChannel();
+      const title = state?.title || job_id;
+
+      if (!targetThreadTs) {
+        throw new Error(`スレッドが見つかりません: job_id=${job_id}, thread_ts=${thread_ts}`);
       }
 
-      if (threadStore.isTerminal(job_id)) {
+      if (state && threadStore.isTerminal(job_id)) {
         return {
           content: [
             {
@@ -196,9 +222,9 @@ export function slackThreadTools(
 
       const reasonText = reason || "権限確認またはユーザー入力待ち";
       const result = await slackClient.postWaiting(
-        state.channel,
-        state.threadTs,
-        state.title,
+        targetChannel,
+        targetThreadTs,
+        title,
         reasonText,
         mention !== false
       );
@@ -221,6 +247,10 @@ export function slackThreadTools(
       "ジョブの完了を同スレッドに返信します。デフォルトでメンションを行います。",
     parameters: z.object({
       job_id: z.string().describe("ジョブの一意識別子"),
+      thread_ts: z
+        .string()
+        .optional()
+        .describe("スレッドのタイムスタンプ（job_idでスレッドが見つからない場合に使用）"),
       summary: z.string().optional().describe("完了サマリ"),
       next_suggestions: z
         .array(z.string())
@@ -231,17 +261,23 @@ export function slackThreadTools(
         .optional()
         .describe("メンションを行うか（デフォルト: true）"),
     }),
-    execute: async ({ job_id, summary, next_suggestions, mention }) => {
+    execute: async ({ job_id, thread_ts, summary, next_suggestions, mention }) => {
       const state = threadStore.get(job_id);
-      if (!state) {
-        throw new Error(`ジョブが見つかりません: ${job_id}`);
+
+      // thread_ts が指定されていればそちらを優先、なければ state から取得
+      const targetThreadTs = thread_ts || state?.threadTs;
+      const targetChannel = state?.channel || slackClient.getDefaultChannel();
+      const title = state?.title || job_id;
+
+      if (!targetThreadTs) {
+        throw new Error(`スレッドが見つかりません: job_id=${job_id}, thread_ts=${thread_ts}`);
       }
 
       // 権限確認待ち監視をキャンセル
       slackClient.cancelWaitingMonitor(job_id);
 
       // 冪等性: 既に完了/失敗なら何もしない
-      if (threadStore.isTerminal(job_id)) {
+      if (state && threadStore.isTerminal(job_id)) {
         return {
           content: [
             {
@@ -256,15 +292,15 @@ export function slackThreadTools(
       }
 
       const result = await slackClient.postComplete(
-        state.channel,
-        state.threadTs,
-        state.title,
+        targetChannel,
+        targetThreadTs,
+        title,
         summary,
         next_suggestions,
         mention !== false
       );
 
-      if (result.ok) {
+      if (result.ok && state) {
         threadStore.updateStatus(job_id, "completed");
       }
 
@@ -286,6 +322,10 @@ export function slackThreadTools(
       "ジョブの失敗を同スレッドに返信します。デフォルトでメンションを行います。",
     parameters: z.object({
       job_id: z.string().describe("ジョブの一意識別子"),
+      thread_ts: z
+        .string()
+        .optional()
+        .describe("スレッドのタイムスタンプ（job_idでスレッドが見つからない場合に使用）"),
       error_summary: z.string().describe("エラーの概要"),
       logs_hint: z
         .string()
@@ -296,17 +336,23 @@ export function slackThreadTools(
         .optional()
         .describe("メンションを行うか（デフォルト: true）"),
     }),
-    execute: async ({ job_id, error_summary, logs_hint, mention }) => {
+    execute: async ({ job_id, thread_ts, error_summary, logs_hint, mention }) => {
       const state = threadStore.get(job_id);
-      if (!state) {
-        throw new Error(`ジョブが見つかりません: ${job_id}`);
+
+      // thread_ts が指定されていればそちらを優先、なければ state から取得
+      const targetThreadTs = thread_ts || state?.threadTs;
+      const targetChannel = state?.channel || slackClient.getDefaultChannel();
+      const title = state?.title || job_id;
+
+      if (!targetThreadTs) {
+        throw new Error(`スレッドが見つかりません: job_id=${job_id}, thread_ts=${thread_ts}`);
       }
 
       // 権限確認待ち監視をキャンセル
       slackClient.cancelWaitingMonitor(job_id);
 
       // 冪等性: 既に完了/失敗なら何もしない
-      if (threadStore.isTerminal(job_id)) {
+      if (state && threadStore.isTerminal(job_id)) {
         return {
           content: [
             {
@@ -321,15 +367,15 @@ export function slackThreadTools(
       }
 
       const result = await slackClient.postFail(
-        state.channel,
-        state.threadTs,
-        state.title,
+        targetChannel,
+        targetThreadTs,
+        title,
         error_summary,
         logs_hint,
         mention !== false
       );
 
-      if (result.ok) {
+      if (result.ok && state) {
         threadStore.updateStatus(job_id, "failed");
       }
 

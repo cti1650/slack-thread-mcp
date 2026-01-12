@@ -122,7 +122,8 @@ export class SlackClient {
   async postParentMessage(
     channel: string,
     title: string,
-    meta?: Record<string, unknown>
+    meta?: Record<string, unknown>,
+    mention: boolean = true
   ): Promise<PostResult> {
     const metaText = meta
       ? Object.entries(meta)
@@ -130,8 +131,9 @@ export class SlackClient {
           .join("\n")
       : "";
 
+    const mentionText = mention ? this.formatMention() : "";
     const text = this.formatPrefix(
-      `🚀 *Started:* ${title}\n${metaText ? `\n${metaText}` : ""}`
+      `🚀 *Started:* ${title}${metaText ? `\n${metaText}` : ""}${mentionText ? `\n\n${mentionText}` : ""}`
     );
 
     const result = await this.client.chat.postMessage({
