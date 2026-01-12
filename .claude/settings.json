@@ -1,0 +1,80 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run build:*)",
+      "Bash(npx slack-thread-mcp *)",
+      "Bash(npx slack-notify *)",
+      "Bash(node build/cli.js *)",
+      "mcp__slack-thread__*"
+    ],
+    "deny": [
+      "git add",
+      "git commit",
+      "git push"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -f \"${CLAUDE_PROJECT_DIR}/.env\" ]; then set -a && source \"${CLAUDE_PROJECT_DIR}/.env\" && set +a && env | grep -E '^SLACK_|^THREAD_STATE_PATH=' >> \"$CLAUDE_ENV_FILE\"; fi"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx slack-thread-mcp start --job-id=${CLAUDE_SESSION_ID:-default} --title=\"Claude Code Task\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx slack-thread-mcp update --job-id=${CLAUDE_SESSION_ID:-default} --message=\"Tool: ${CLAUDE_TOOL_NAME}\""
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx slack-thread-mcp waiting --job-id=${CLAUDE_SESSION_ID:-default} --reason=\"権限確認待ち: ${CLAUDE_TOOL_NAME}\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx slack-thread-mcp update --job-id=${CLAUDE_SESSION_ID:-default} --message=\"応答完了\" --level=debug"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx slack-thread-mcp complete --job-id=${CLAUDE_SESSION_ID:-default} --summary=\"Session completed\""
+          }
+        ]
+      }
+    ]
+  }
+}

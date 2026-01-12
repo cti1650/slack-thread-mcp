@@ -362,12 +362,54 @@ Claude Code の Hooks 機能と組み合わせて、自動的に Slack 通知を
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx slack-thread-mcp start --job-id=${CLAUDE_SESSION_ID:-default} --title=\"Claude Code Task\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx slack-thread-mcp update --job-id=${CLAUDE_SESSION_ID:-default} --message=\"Tool: ${CLAUDE_TOOL_NAME}\""
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx slack-thread-mcp waiting --job-id=${CLAUDE_SESSION_ID:-default} --reason=\"権限確認待ち: ${CLAUDE_TOOL_NAME}\""
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "npx slack-thread-mcp complete --job-id=${CLAUDE_SESSION_ID:-default} --summary=\"Session completed\" --mention=false"
+            "command": "npx slack-thread-mcp update --job-id=${CLAUDE_SESSION_ID:-default} --message=\"応答完了\" --level=debug"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx slack-thread-mcp complete --job-id=${CLAUDE_SESSION_ID:-default} --summary=\"Session completed\""
           }
         ]
       }
@@ -378,7 +420,11 @@ Claude Code の Hooks 機能と組み合わせて、自動的に Slack 通知を
 
 **ポイント:**
 - `SessionStart` フックでプロジェクトの `.env` ファイルを読み込み、環境変数をセッション全体で利用可能にします
-- `Stop` フックでセッション終了時に完了通知を送信します
+- `UserPromptSubmit` フックでユーザー入力時にスレッドを作成します（冪等性により同一セッションでは再利用）
+- `PostToolUse` フックでツール実行後に進捗を通知します（`matcher: "*"` で全ツールにマッチ）
+- `PermissionRequest` フックで権限確認待ち時にメンション付きで通知します
+- `Stop` フックで各応答完了時に進捗更新します（`complete` ではなく `update` を使用）
+- `SessionEnd` フックでセッション終了時に完了通知を送信します
 - `.env` ファイルには `SLACK_BOT_TOKEN`、`SLACK_DEFAULT_CHANNEL`、`THREAD_STATE_PATH` などを設定してください
 
 ## 開発
