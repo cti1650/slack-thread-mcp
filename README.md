@@ -18,8 +18,39 @@ Claude Code / Claude Desktop から Slack スレッドに進捗通知を送信�
 
 ### 1. Slack Bot の準備
 
-1. [Slack API](https://api.slack.com/apps) で新しいアプリを作成
-2. Bot Token Scopes に以下を追加:
+#### 方法A: マニフェストから作成（推奨）
+
+1. [Slack API](https://api.slack.com/apps) で「Create New App」→「From an app manifest」を選択
+2. ワークスペースを選択
+3. 以下のマニフェストを貼り付け:
+
+```yaml
+display_information:
+  name: Slack Thread Notifier
+  description: Claude Code / Claude Desktop からの進捗通知を Slack スレッドに投稿するBot
+  background_color: "#4A154B"
+features:
+  bot_user:
+    display_name: Thread Notifier
+    always_online: false
+oauth_config:
+  scopes:
+    bot:
+      - chat:write
+      - chat:write.public
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
+```
+
+4. 「Create」→「Install to Workspace」でインストール
+5. 「OAuth & Permissions」から Bot User OAuth Token (`xoxb-...`) をコピー
+
+#### 方法B: 手動で作成
+
+1. [Slack API](https://api.slack.com/apps) で「Create New App」→「From scratch」を選択
+2. 「OAuth & Permissions」→ Bot Token Scopes に以下を追加:
    - `chat:write`
    - `chat:write.public`（パブリックチャンネルへの投稿用）
 3. ワークスペースにインストールし、Bot User OAuth Token を取得
