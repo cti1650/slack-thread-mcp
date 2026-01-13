@@ -70,7 +70,6 @@ function loadDotEnv(): void {
   debug("env", "Environment loading context", {
     cwd,
     envPath,
-    __dirname,
     argv: process.argv,
     execPath: process.execPath,
   });
