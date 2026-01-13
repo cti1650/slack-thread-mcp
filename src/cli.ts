@@ -6,6 +6,20 @@ import { join } from "path";
 import { SlackClient } from "./lib/slack-client.js";
 import { ThreadStore } from "./lib/thread-store.js";
 
+// デバッグモード
+const DEBUG = process.env.SLACK_THREAD_DEBUG === "true" || process.env.DEBUG === "true";
+
+function debug(category: string, message: string, data?: unknown): void {
+  if (!DEBUG) return;
+  const timestamp = new Date().toISOString();
+  const prefix = `[${timestamp}] [DEBUG] [${category}]`;
+  if (data !== undefined) {
+    console.error(`${prefix} ${message}:`, JSON.stringify(data, null, 2));
+  } else {
+    console.error(`${prefix} ${message}`);
+  }
+}
+
 // グローバル設定ファイルのパス
 const GLOBAL_CONFIG_PATHS = [
   join(homedir(), ".config", "slack-thread-mcp", "config.json"),
@@ -22,25 +36,53 @@ interface GlobalConfig {
 }
 
 function loadGlobalConfig(): GlobalConfig {
+  debug("config", "Looking for global config files", GLOBAL_CONFIG_PATHS);
   for (const configPath of GLOBAL_CONFIG_PATHS) {
+    debug("config", `Checking config path: ${configPath}`, { exists: existsSync(configPath) });
     if (existsSync(configPath)) {
       try {
         const content = readFileSync(configPath, "utf-8");
-        return JSON.parse(content) as GlobalConfig;
-      } catch {
+        const config = JSON.parse(content) as GlobalConfig;
+        debug("config", `Loaded global config from ${configPath}`, {
+          hasToken: !!config.slackBotToken,
+          hasChannel: !!config.slackDefaultChannel,
+          hasMentionUserIds: !!config.slackMentionUserIds,
+          hasMentionGroupId: !!config.slackMentionGroupId,
+          hasPostPrefix: !!config.slackPostPrefix,
+          hasThreadStatePath: !!config.threadStatePath,
+        });
+        return config;
+      } catch (error) {
+        debug("config", `Failed to parse config at ${configPath}`, { error: String(error) });
         // Continue to next config path
       }
     }
   }
+  debug("config", "No global config found");
   return {};
 }
 
 function loadDotEnv(): void {
   // プロジェクトディレクトリの .env を読み込む
-  const envPath = join(process.cwd(), ".env");
+  const cwd = process.cwd();
+  const envPath = join(cwd, ".env");
+
+  debug("env", "Environment loading context", {
+    cwd,
+    envPath,
+    __dirname,
+    argv: process.argv,
+    execPath: process.execPath,
+  });
+
+  debug("env", `Checking .env file`, { path: envPath, exists: existsSync(envPath) });
+
   if (existsSync(envPath)) {
     try {
       const content = readFileSync(envPath, "utf-8");
+      const loadedKeys: string[] = [];
+      const skippedKeys: string[] = [];
+
       for (const line of content.split("\n")) {
         const trimmed = line.trim();
         if (trimmed && !trimmed.startsWith("#")) {
@@ -48,12 +90,24 @@ function loadDotEnv(): void {
           const value = valueParts.join("=").replace(/^["']|["']$/g, "");
           if (key && !process.env[key]) {
             process.env[key] = value;
+            loadedKeys.push(key);
+          } else if (key && process.env[key]) {
+            skippedKeys.push(key);
           }
         }
       }
-    } catch {
+
+      debug("env", "Loaded .env file", {
+        loadedKeys,
+        skippedKeys,
+        skippedReason: "Already set in environment",
+      });
+    } catch (error) {
+      debug("env", "Failed to read .env file", { error: String(error) });
       // Ignore .env read errors
     }
+  } else {
+    debug("env", ".env file not found, skipping");
   }
 }
 
@@ -67,6 +121,8 @@ interface Config {
 }
 
 function resolveConfig(): Config {
+  debug("resolve", "Starting config resolution");
+
   // .env ファイルを読み込み
   loadDotEnv();
 
@@ -79,15 +135,29 @@ function resolveConfig(): Config {
   const slackDefaultChannel =
     process.env.SLACK_DEFAULT_CHANNEL || globalConfig.slackDefaultChannel;
 
+  debug("resolve", "Token resolution", {
+    fromEnv: !!process.env.SLACK_BOT_TOKEN,
+    fromGlobalConfig: !!globalConfig.slackBotToken,
+    resolved: !!slackBotToken,
+  });
+
+  debug("resolve", "Channel resolution", {
+    fromEnv: process.env.SLACK_DEFAULT_CHANNEL,
+    fromGlobalConfig: globalConfig.slackDefaultChannel,
+    resolved: slackDefaultChannel,
+  });
+
   if (!slackBotToken) {
     console.error("Error: SLACK_BOT_TOKEN is not set");
     console.error("Set it via environment variable, .env file, or global config");
     console.error(`Global config paths: ${GLOBAL_CONFIG_PATHS.join(", ")}`);
+    debug("resolve", "SLACK_BOT_TOKEN not found - exiting");
     process.exit(1);
   }
 
   if (!slackDefaultChannel) {
     console.error("Error: SLACK_DEFAULT_CHANNEL is not set");
+    debug("resolve", "SLACK_DEFAULT_CHANNEL not found - exiting");
     process.exit(1);
   }
 
@@ -98,7 +168,7 @@ function resolveConfig(): Config {
     ? mentionUserIdsRaw.split(",").map((id) => id.trim())
     : undefined;
 
-  return {
+  const resolvedConfig = {
     slackBotToken,
     slackDefaultChannel,
     slackMentionUserIds,
@@ -109,6 +179,17 @@ function resolveConfig(): Config {
     threadStatePath:
       process.env.THREAD_STATE_PATH || globalConfig.threadStatePath,
   };
+
+  debug("resolve", "Final resolved config", {
+    hasToken: !!resolvedConfig.slackBotToken,
+    channel: resolvedConfig.slackDefaultChannel,
+    mentionUserIds: resolvedConfig.slackMentionUserIds,
+    mentionGroupId: resolvedConfig.slackMentionGroupId,
+    postPrefix: resolvedConfig.slackPostPrefix,
+    threadStatePath: resolvedConfig.threadStatePath,
+  });
+
+  return resolvedConfig;
 }
 
 function parseArgs(args: string[]): { command: string; options: Record<string, string> } {
@@ -171,8 +252,17 @@ Examples:
 }
 
 async function main(): Promise<void> {
+  debug("main", "CLI started", {
+    nodeVersion: process.version,
+    platform: process.platform,
+    pid: process.pid,
+    ppid: process.ppid,
+  });
+
   const args = process.argv.slice(2);
   const { command, options } = parseArgs(args);
+
+  debug("main", "Parsed arguments", { command, options, rawArgs: args });
 
   if (command === "help" || args.includes("--help") || args.includes("-h")) {
     printUsage();
@@ -181,6 +271,7 @@ async function main(): Promise<void> {
 
   const config = resolveConfig();
 
+  debug("main", "Creating SlackClient");
   const slackClient = new SlackClient({
     botToken: config.slackBotToken,
     defaultChannel: config.slackDefaultChannel,
@@ -189,20 +280,26 @@ async function main(): Promise<void> {
     postPrefix: config.slackPostPrefix,
   });
 
+  debug("main", "Creating ThreadStore", { statePath: config.threadStatePath });
   const threadStore = new ThreadStore(config.threadStatePath);
 
   const jobId = options["job-id"];
   if (!jobId && command !== "help") {
     console.error("Error: --job-id is required");
+    debug("main", "Missing job-id - exiting");
     process.exit(1);
   }
 
   const channel = options.channel || config.slackDefaultChannel;
   const mention = options.mention !== "false";
 
+  debug("main", "Execution context", { jobId, channel, mention, command });
+
   try {
     switch (command) {
       case "start": {
+        debug("cmd:start", "Processing start command", { jobId, title: options.title });
+
         const title = options.title;
         if (!title) {
           console.error("Error: --title is required for start command");
@@ -211,7 +308,10 @@ async function main(): Promise<void> {
 
         // 冪等性: 既存のジョブがあれば再利用
         const existing = threadStore.get(jobId);
+        debug("cmd:start", "Checking existing thread", { jobId, exists: !!existing });
+
         if (existing) {
+          debug("cmd:start", "Reusing existing thread", existing);
           console.log(JSON.stringify({
             job_id: existing.jobId,
             channel: existing.channel,
@@ -226,12 +326,14 @@ async function main(): Promise<void> {
         if (options.meta) {
           try {
             meta = JSON.parse(options.meta);
+            debug("cmd:start", "Parsed meta", meta);
           } catch {
             console.error("Error: --meta must be valid JSON");
             process.exit(1);
           }
         }
 
+        debug("cmd:start", "Posting parent message to Slack", { channel, title, hasMeta: !!meta, mention });
         const result = await slackClient.postParentMessage(
           channel,
           title,
@@ -239,8 +341,11 @@ async function main(): Promise<void> {
           mention
         );
 
+        debug("cmd:start", "Slack API response", { ok: result.ok, channel: result.channel, ts: result.ts });
+
         if (!result.ok) {
           console.error("Error: Failed to post to Slack");
+          debug("cmd:start", "Failed to post - exiting");
           process.exit(1);
         }
 
@@ -252,6 +357,8 @@ async function main(): Promise<void> {
           result.permalink
         );
 
+        debug("cmd:start", "Thread state created", state);
+
         console.log(JSON.stringify({
           job_id: state.jobId,
           channel: state.channel,
@@ -262,6 +369,8 @@ async function main(): Promise<void> {
       }
 
       case "update": {
+        debug("cmd:update", "Processing update command", { jobId, message: options.message, level: options.level });
+
         const message = options.message;
         if (!message) {
           console.error("Error: --message is required for update command");
@@ -272,21 +381,33 @@ async function main(): Promise<void> {
         const targetThreadTs = options["thread-ts"] || state?.threadTs;
         const targetChannel = state?.channel || channel;
 
+        debug("cmd:update", "Thread lookup", {
+          jobId,
+          stateFound: !!state,
+          targetThreadTs,
+          targetChannel,
+        });
+
         if (!targetThreadTs) {
           console.error(`Error: Thread not found for job_id=${jobId}`);
+          debug("cmd:update", "Thread not found - exiting");
           process.exit(1);
         }
 
         if (state && threadStore.isTerminal(jobId)) {
+          debug("cmd:update", "Job already terminated", { status: state.status });
           console.log(JSON.stringify({ ok: false, reason: "Job already terminated" }));
           break;
         }
 
         if (state) {
           threadStore.updateStatus(jobId, "in_progress");
+          debug("cmd:update", "Updated job status to in_progress");
         }
 
         const level = (options.level || "info") as "info" | "warn" | "debug";
+        debug("cmd:update", "Posting thread reply", { targetChannel, targetThreadTs, level });
+
         const result = await slackClient.postThreadReply(
           targetChannel,
           targetThreadTs,
@@ -294,27 +415,42 @@ async function main(): Promise<void> {
           level
         );
 
+        debug("cmd:update", "Slack API response", { ok: result.ok });
         console.log(JSON.stringify({ ok: result.ok }));
         break;
       }
 
       case "waiting": {
+        debug("cmd:waiting", "Processing waiting command", { jobId, reason: options.reason });
+
         const state = threadStore.get(jobId);
         const targetThreadTs = options["thread-ts"] || state?.threadTs;
         const targetChannel = state?.channel || channel;
         const title = state?.title || jobId;
 
+        debug("cmd:waiting", "Thread lookup", {
+          jobId,
+          stateFound: !!state,
+          targetThreadTs,
+          targetChannel,
+          title,
+        });
+
         if (!targetThreadTs) {
           console.error(`Error: Thread not found for job_id=${jobId}`);
+          debug("cmd:waiting", "Thread not found - exiting");
           process.exit(1);
         }
 
         if (state && threadStore.isTerminal(jobId)) {
+          debug("cmd:waiting", "Job already terminated", { status: state.status });
           console.log(JSON.stringify({ ok: false, reason: "Job already terminated" }));
           break;
         }
 
         const reason = options.reason || "Waiting for permission or user input";
+        debug("cmd:waiting", "Posting waiting message", { targetChannel, targetThreadTs, title, reason, mention });
+
         const result = await slackClient.postWaiting(
           targetChannel,
           targetThreadTs,
@@ -323,23 +459,36 @@ async function main(): Promise<void> {
           mention
         );
 
+        debug("cmd:waiting", "Slack API response", { ok: result.ok });
         console.log(JSON.stringify({ ok: result.ok }));
         break;
       }
 
       case "complete": {
+        debug("cmd:complete", "Processing complete command", { jobId, summary: options.summary });
+
         const state = threadStore.get(jobId);
         const targetThreadTs = options["thread-ts"] || state?.threadTs;
         const targetChannel = state?.channel || channel;
         const title = state?.title || jobId;
 
+        debug("cmd:complete", "Thread lookup", {
+          jobId,
+          stateFound: !!state,
+          targetThreadTs,
+          targetChannel,
+          title,
+        });
+
         if (!targetThreadTs) {
           console.error(`Error: Thread not found for job_id=${jobId}`);
+          debug("cmd:complete", "Thread not found - exiting");
           process.exit(1);
         }
 
         // 冪等性: 既に終了済みなら何もしない
         if (state && threadStore.isTerminal(jobId)) {
+          debug("cmd:complete", "Job already terminated (idempotent)", { status: state.status });
           console.log(JSON.stringify({ ok: true, note: "Job already terminated" }));
           break;
         }
@@ -351,7 +500,10 @@ async function main(): Promise<void> {
           } catch {
             nextSuggestions = options["next-suggestions"].split(",");
           }
+          debug("cmd:complete", "Parsed nextSuggestions", nextSuggestions);
         }
+
+        debug("cmd:complete", "Posting complete message", { targetChannel, targetThreadTs, title, mention });
 
         const result = await slackClient.postComplete(
           targetChannel,
@@ -362,8 +514,11 @@ async function main(): Promise<void> {
           mention
         );
 
+        debug("cmd:complete", "Slack API response", { ok: result.ok });
+
         if (result.ok && state) {
           threadStore.updateStatus(jobId, "completed");
+          debug("cmd:complete", "Updated job status to completed");
         }
 
         console.log(JSON.stringify({ ok: result.ok }));
@@ -371,6 +526,8 @@ async function main(): Promise<void> {
       }
 
       case "fail": {
+        debug("cmd:fail", "Processing fail command", { jobId, error: options.error, logsHint: options["logs-hint"] });
+
         const errorSummary = options.error;
         if (!errorSummary) {
           console.error("Error: --error is required for fail command");
@@ -382,16 +539,28 @@ async function main(): Promise<void> {
         const targetChannel = state?.channel || channel;
         const title = state?.title || jobId;
 
+        debug("cmd:fail", "Thread lookup", {
+          jobId,
+          stateFound: !!state,
+          targetThreadTs,
+          targetChannel,
+          title,
+        });
+
         if (!targetThreadTs) {
           console.error(`Error: Thread not found for job_id=${jobId}`);
+          debug("cmd:fail", "Thread not found - exiting");
           process.exit(1);
         }
 
         // 冪等性: 既に終了済みなら何もしない
         if (state && threadStore.isTerminal(jobId)) {
+          debug("cmd:fail", "Job already terminated (idempotent)", { status: state.status });
           console.log(JSON.stringify({ ok: true, note: "Job already terminated" }));
           break;
         }
+
+        debug("cmd:fail", "Posting fail message", { targetChannel, targetThreadTs, title, errorSummary, mention });
 
         const result = await slackClient.postFail(
           targetChannel,
@@ -402,8 +571,11 @@ async function main(): Promise<void> {
           mention
         );
 
+        debug("cmd:fail", "Slack API response", { ok: result.ok });
+
         if (result.ok && state) {
           threadStore.updateStatus(jobId, "failed");
+          debug("cmd:fail", "Updated job status to failed");
         }
 
         console.log(JSON.stringify({ ok: result.ok }));
@@ -411,11 +583,18 @@ async function main(): Promise<void> {
       }
 
       default:
+        debug("main", "Unknown command", { command });
         console.error(`Unknown command: ${command}`);
         printUsage();
         process.exit(1);
     }
+
+    debug("main", "Command completed successfully", { command });
   } catch (error) {
+    debug("main", "Unhandled error", {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
     console.error("Error:", error instanceof Error ? error.message : error);
     process.exit(1);
   }
