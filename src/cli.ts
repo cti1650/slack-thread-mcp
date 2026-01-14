@@ -9,6 +9,52 @@ import { ThreadStore } from "./lib/thread-store.js";
 // デバッグモード
 const DEBUG = process.env.SLACK_THREAD_DEBUG === "true" || process.env.DEBUG === "true";
 
+// transcript ファイルから最後のアシスタント応答を取得
+function getLastAssistantResponse(transcriptPath: string, maxLength: number = 200): string | null {
+  try {
+    if (!existsSync(transcriptPath)) {
+      return null;
+    }
+
+    const content = readFileSync(transcriptPath, "utf-8");
+    const lines = content.trim().split("\n");
+
+    // JSONL形式: 各行がJSONオブジェクト
+    // 最後からアシスタントのテキスト応答を探す
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const entry = JSON.parse(lines[i]);
+
+        // アシスタントのメッセージを探す
+        if (entry.type === "assistant" && entry.message?.content) {
+          // contentは配列で、textブロックを探す
+          const textBlocks = entry.message.content.filter(
+            (block: { type: string; text?: string }) => block.type === "text" && block.text
+          );
+
+          if (textBlocks.length > 0) {
+            // 最後のテキストブロックを取得
+            const lastText = textBlocks[textBlocks.length - 1].text as string;
+            // 長すぎる場合は切り詰め
+            if (lastText.length > maxLength) {
+              return lastText.slice(0, maxLength) + "...";
+            }
+            return lastText;
+          }
+        }
+      } catch {
+        // JSONパースエラーは無視して次の行へ
+        continue;
+      }
+    }
+
+    return null;
+  } catch (error) {
+    debug("transcript", "Failed to read transcript", { error: String(error) });
+    return null;
+  }
+}
+
 function debug(category: string, message: string, data?: unknown): void {
   if (!DEBUG) return;
   const timestamp = new Date().toISOString();
@@ -316,6 +362,16 @@ async function parseArgs(args: string[]): Promise<{ command: string; options: Re
           options["_prompt"] = stdinData.prompt;
         }
 
+        // messageがあれば内部オプションとして保存（Notification用）
+        if (stdinData.message) {
+          options["_message"] = stdinData.message;
+        }
+
+        // transcript_pathがあれば内部オプションとして保存（Stop用）
+        if (stdinData.transcript_path) {
+          options["_transcript_path"] = stdinData.transcript_path;
+        }
+
         // cwdがあれば内部オプションとして保存
         if (stdinData.cwd) {
           options["_cwd"] = stdinData.cwd;
@@ -564,10 +620,19 @@ async function main(): Promise<void> {
         // upsertモード: PostToolUseイベント時はメッセージを上書き
         const useUpsert = options.upsert === "true" || isPostToolUse;
 
-        // メッセージの生成: --message > tool詳細自動生成 > エラー
+        // メッセージの生成: --message > prompt自動生成 > tool詳細自動生成 > エラー
         let message = options.message;
+
+        // UserPromptSubmitイベントでpromptがある場合は自動生成
+        if (!message && hookEvent === "UserPromptSubmit" && options["_prompt"]) {
+          const prompt = options["_prompt"];
+          const truncated = prompt.length > 100 ? prompt.slice(0, 100) + "..." : prompt;
+          message = `*Prompt:* ${truncated}`;
+          debug("cmd:update", "Auto-generated message from prompt", { promptLength: prompt.length });
+        }
+
+        // PostToolUseイベントでtool_nameがある場合は詳細情報を含めて自動生成
         if (!message && stdinData?.tool_name) {
-          // PostToolUseイベントでtool_nameがある場合は詳細情報を含めて自動生成
           const toolName = stdinData.tool_name;
           const toolInput = stdinData.tool_input;
 
@@ -595,6 +660,19 @@ async function main(): Promise<void> {
           message = details ? `*${toolName}*: ${details}` : `*${toolName}*`;
           debug("cmd:update", "Auto-generated message from tool details", { toolName, details });
         }
+
+        // Stopイベントでtranscript_pathがある場合は応答内容を取得
+        if (!message && hookEvent === "Stop" && options["_transcript_path"]) {
+          const lastResponse = getLastAssistantResponse(options["_transcript_path"]);
+          if (lastResponse) {
+            message = `*Response:* ${lastResponse}`;
+            debug("cmd:update", "Auto-generated message from transcript", { responseLength: lastResponse.length });
+          } else {
+            message = "応答完了";
+            debug("cmd:update", "Using default message (no response found in transcript)");
+          }
+        }
+
         if (!message) {
           console.error("Error: --message is required for update command");
           process.exit(1);
@@ -683,8 +761,16 @@ async function main(): Promise<void> {
           break;
         }
 
-        // reasonの生成: --reason > notification_type自動生成 > デフォルト
+        // reasonの生成: --reason > message自動生成 > notification_type自動生成 > デフォルト
         let reason = options.reason;
+
+        // Notificationイベントでmessageがある場合は使用
+        if (!reason && options["_message"]) {
+          reason = options["_message"];
+          debug("cmd:waiting", "Using message from Notification event", { message: reason });
+        }
+
+        // notification_typeがある場合はプレフィックスを追加
         if (!reason && options["_notification_type"]) {
           // Notificationイベントでnotification_typeがある場合は自動生成
           const typeMap: Record<string, string> = {
@@ -696,6 +782,7 @@ async function main(): Promise<void> {
           reason = typeMap[options["_notification_type"]] || options["_notification_type"];
           debug("cmd:waiting", "Auto-generated reason from notification_type", { notificationType: options["_notification_type"] });
         }
+
         if (!reason) {
           reason = "Waiting for permission or user input";
         }
