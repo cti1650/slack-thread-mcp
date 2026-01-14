@@ -340,8 +340,6 @@ THREAD_STATE_PATH=~/.local/share/slack-thread-mcp/threads.json
 
 Claude Code の Hooks 機能と組み合わせて、自動的に Slack 通知を送信できます。
 
-**重要:** permissions の `deny` ルールは `Bash(コマンド)` 形式で記述する必要があります。
-
 **設定例 (`.claude/settings.json`):**
 
 ```json
@@ -349,11 +347,6 @@ Claude Code の Hooks 機能と組み合わせて、自動的に Slack 通知を
   "permissions": {
     "allow": [
       "Bash(npx slack-thread-mcp *)"
-    ],
-    "deny": [
-      "Bash(git add *)",
-      "Bash(git commit *)",
-      "Bash(git push *)"
     ]
   },
   "hooks": {
