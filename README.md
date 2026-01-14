@@ -282,16 +282,19 @@ npx slack-thread-mcp help
 
 | オプション | 説明 |
 |-----------|------|
-| `--job-id=<id>` | ジョブID（必須） |
+| `--stdin` | 標準入力から JSON を読み取り（Claude Code Hooks 用） |
+| `--save-env` | job-id と Slack 設定を CLAUDE_ENV_FILE に保存 |
+| `--job-id=<id>` | ジョブID（`--stdin` 使用時は session_id から自動取得） |
 | `--title=<title>` | ジョブタイトル（start時必須） |
-| `--message=<msg>` | 進捗メッセージ（update時必須） |
+| `--message=<msg>` | 進捗メッセージ（`--stdin` 使用時は自動生成可能） |
 | `--level=<level>` | メッセージレベル: info, warn, debug（デフォルト: info） |
-| `--reason=<reason>` | 待機理由（waiting時） |
+| `--upsert=<bool>` | 既存メッセージを上書き（PostToolUse時は自動で true） |
+| `--reason=<reason>` | 待機理由（`--stdin` 使用時は自動生成可能） |
 | `--summary=<text>` | 完了サマリ（complete時） |
 | `--error=<text>` | エラー概要（fail時必須） |
 | `--logs-hint=<text>` | ログのヒント（fail時） |
 | `--channel=<ch>` | チャンネルを上書き |
-| `--mention=<bool>` | メンションの有効/無効（デフォルト: true） |
+| `--mention=<bool>` | メンションの有効/無効（デフォルト: イベントにより異なる） |
 | `--meta=<json>` | 追加メタデータ（JSON形式、start時） |
 | `--thread-ts=<ts>` | スレッドタイムスタンプ（job_idでスレッドが見つからない場合） |
 
@@ -365,7 +368,7 @@ Claude Code の Hooks 機能と組み合わせて、自動的に Slack 通知を
         "hooks": [
           {
             "type": "command",
-            "command": "npx slack-thread-mcp update --stdin --message=\"プロンプト受信\""
+            "command": "npx slack-thread-mcp update --stdin"
           }
         ]
       }
@@ -376,7 +379,7 @@ Claude Code の Hooks 機能と組み合わせて、自動的に Slack 通知を
         "hooks": [
           {
             "type": "command",
-            "command": "npx slack-thread-mcp update --stdin --message=\"ツール実行完了\""
+            "command": "npx slack-thread-mcp update --stdin"
           }
         ]
       }
@@ -387,7 +390,7 @@ Claude Code の Hooks 機能と組み合わせて、自動的に Slack 通知を
         "hooks": [
           {
             "type": "command",
-            "command": "npx slack-thread-mcp waiting --stdin --reason=\"権限確認待ち\""
+            "command": "npx slack-thread-mcp waiting --stdin"
           }
         ]
       }
@@ -397,7 +400,7 @@ Claude Code の Hooks 機能と組み合わせて、自動的に Slack 通知を
         "hooks": [
           {
             "type": "command",
-            "command": "npx slack-thread-mcp update --stdin --message=\"応答完了\" --level=debug"
+            "command": "npx slack-thread-mcp update --stdin --level=debug"
           }
         ]
       }
@@ -416,15 +419,29 @@ Claude Code の Hooks 機能と組み合わせて、自動的に Slack 通知を
 }
 ```
 
+**メッセージの流れ:**
+
+`--stdin` オプションを使用すると、Claude Code から渡されるコンテキスト情報を自動的に受け取り、適切なメッセージを生成します。
+
+```
+UserPromptSubmit → 新規投稿「*Prompt:* ファイルを読んで...」
+PostToolUse (1回目) → 新規投稿「*Read*: `/path/to/file.ts`」
+PostToolUse (2回目) → 上書き「*Edit*: `/path/to/file.ts`」
+PostToolUse (3回目) → 上書き「*Bash*: `npm run build`」
+Stop → 新規投稿「*Response:* 変更を完了しました...」
+UserPromptSubmit → 新規投稿「*Prompt:* 次の指示...」（次のプロンプト）
+```
+
 **ポイント:**
-- `--stdin` オプションで Claude Code から渡される JSON データ（session_id など）を自動的に受け取ります
+- `--stdin` オプションで Claude Code から渡される JSON データ（session_id, prompt, tool_name 等）を自動的に受け取ります
 - `--save-env` オプションで session_id を環境変数として保存し、以降のフックで利用可能にします
-- `SessionStart` フックでスレッドを作成します（冪等性により同一セッションでは再利用）
-- `UserPromptSubmit` フックでユーザー入力時に進捗を通知します
-- `PostToolUse` フックでツール実行後に進捗を通知します（`matcher: "*"` で全ツールにマッチ）
-- `Notification` フックで権限確認待ち時にメンション付きで通知します
-- `Stop` フックで各応答完了時に進捗更新します（`complete` ではなく `update` を使用）
-- `SessionEnd` フックでセッション終了時に完了通知を送信します
+- **自動メッセージ生成**: `--message` を省略すると、フックイベントに応じて以下を自動生成:
+  - `UserPromptSubmit`: ユーザーのプロンプト内容（100文字まで）
+  - `PostToolUse`: ツール名と詳細（ファイルパス、コマンド等）
+  - `Stop`: アシスタントの最後の応答（200文字まで）
+  - `Notification`: 通知タイプに応じた待機理由
+- **PostToolUse の上書き動作**: 連続する `PostToolUse` は既存メッセージを上書きし、スレッドをコンパクトに保ちます
+- **UserPromptSubmit/Stop は新規投稿**: 新しいプロンプトや応答完了時は新しいメッセージとして投稿します
 
 **環境変数の設定:**
 

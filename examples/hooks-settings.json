@@ -1,8 +1,21 @@
 {
   "_comment": "Claude Code settings.json / settings.local.json の設定例",
   "_usage": "このファイルの内容を .claude/settings.json または .claude/settings.local.json にコピーしてください",
-  "_env_note": ".env ファイルにSLACK設定を配置してください（SLACK_BOT_TOKEN, SLACK_DEFAULT_CHANNEL等）",
-  "_how_it_works": "SessionStartで--save-envにより job-id + Slack設定が環境変数に保存され、以降のフックで自動使用されます",
+  "_env_note": ".env ファイルまたは settings.local.json の env セクションに SLACK設定を配置してください",
+  "_how_it_works": [
+    "SessionStartで--save-envにより job-id + Slack設定が環境変数に保存され、以降のフックで自動使用されます",
+    "--stdinで標準入力からClaude Codeのコンテキスト情報（session_id, prompt, tool_name等）を受け取ります",
+    "PostToolUseでは進捗メッセージを上書き更新（upsert）し、スレッドをコンパクトに保ちます",
+    "UserPromptSubmit/Stopでは新しいメッセージを投稿します"
+  ],
+  "_message_flow": [
+    "UserPromptSubmit → 新規投稿「Prompt: ...」",
+    "PostToolUse (1回目) → 新規投稿「Read: ...」",
+    "PostToolUse (2回目) → 上書き「Edit: ...」",
+    "PostToolUse (3回目) → 上書き「Bash: ...」",
+    "Stop → 新規投稿「Response: ...」",
+    "UserPromptSubmit → 新規投稿「Prompt: ...」（次のプロンプト）"
+  ],
   "permissions": {
     "allow": [
       "Bash(npx slack-thread-mcp *)",
@@ -26,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx slack-thread-mcp update --message=\"プロンプト受信\""
+            "command": "npx slack-thread-mcp update --stdin"
           }
         ]
       }
@@ -37,17 +50,18 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx slack-thread-mcp update --message=\"ツール実行完了\""
+            "command": "npx slack-thread-mcp update --stdin"
           }
         ]
       }
     ],
     "Notification": [
       {
+        "matcher": "*",
         "hooks": [
           {
             "type": "command",
-            "command": "npx slack-thread-mcp waiting --stdin --reason=\"権限確認待ち\""
+            "command": "npx slack-thread-mcp waiting --stdin"
           }
         ]
       }
@@ -57,7 +71,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx slack-thread-mcp update --message=\"応答完了\" --level=debug"
+            "command": "npx slack-thread-mcp update --stdin --level=debug"
           }
         ]
       }
@@ -67,7 +81,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx slack-thread-mcp complete --summary=\"Session completed\""
+            "command": "npx slack-thread-mcp complete --stdin --summary=\"Session completed\""
           }
         ]
       }
