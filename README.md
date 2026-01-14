@@ -330,8 +330,7 @@ THREAD_STATE_PATH=~/.local/share/slack-thread-mcp/threads.json
 {
   "permissions": {
     "allow": [
-      "Bash(npx slack-thread-mcp *)",
-      "Bash(npx slack-notify *)"
+      "Bash(npx slack-thread-mcp *)"
     ]
   }
 }
@@ -341,14 +340,20 @@ THREAD_STATE_PATH=~/.local/share/slack-thread-mcp/threads.json
 
 Claude Code の Hooks 機能と組み合わせて、自動的に Slack 通知を送信できます。
 
+**重要:** permissions の `deny` ルールは `Bash(コマンド)` 形式で記述する必要があります。
+
 **設定例 (`.claude/settings.json`):**
 
 ```json
 {
   "permissions": {
     "allow": [
-      "Bash(npx slack-thread-mcp *)",
-      "Bash(npx slack-notify *)"
+      "Bash(npx slack-thread-mcp *)"
+    ],
+    "deny": [
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)"
     ]
   },
   "hooks": {
@@ -357,7 +362,7 @@ Claude Code の Hooks 機能と組み合わせて、自動的に Slack 通知を
         "hooks": [
           {
             "type": "command",
-            "command": "SESSION_ID=$(cat | jq -r '.session_id // empty'); if [ -n \"$SESSION_ID\" ]; then echo \"CLAUDE_SESSION_ID=$SESSION_ID\" >> \"$CLAUDE_ENV_FILE\"; fi; if [ -f \"${CLAUDE_PROJECT_DIR}/.env\" ]; then set -a && source \"${CLAUDE_PROJECT_DIR}/.env\" && set +a && env | grep -E '^SLACK_|^THREAD_STATE_PATH=' >> \"$CLAUDE_ENV_FILE\"; fi"
+            "command": "npx slack-thread-mcp start --stdin --save-env --title=\"Claude Code Task\""
           }
         ]
       }
@@ -367,7 +372,7 @@ Claude Code の Hooks 機能と組み合わせて、自動的に Slack 通知を
         "hooks": [
           {
             "type": "command",
-            "command": "npx slack-thread-mcp start --job-id=${CLAUDE_SESSION_ID:-$(uuidgen)} --title=\"Claude Code Task\""
+            "command": "npx slack-thread-mcp update --stdin --message=\"プロンプト受信\""
           }
         ]
       }
@@ -378,18 +383,18 @@ Claude Code の Hooks 機能と組み合わせて、自動的に Slack 通知を
         "hooks": [
           {
             "type": "command",
-            "command": "TOOL_NAME=$(cat | jq -r '.tool_name // \"unknown\"'); npx slack-thread-mcp update --job-id=${CLAUDE_SESSION_ID:-default} --message=\"Tool: $TOOL_NAME\""
+            "command": "npx slack-thread-mcp update --stdin --message=\"ツール実行完了\""
           }
         ]
       }
     ],
-    "PermissionRequest": [
+    "Notification": [
       {
         "matcher": "*",
         "hooks": [
           {
             "type": "command",
-            "command": "TOOL_NAME=$(cat | jq -r '.tool_name // \"unknown\"'); npx slack-thread-mcp waiting --job-id=${CLAUDE_SESSION_ID:-default} --reason=\"権限確認待ち: $TOOL_NAME\""
+            "command": "npx slack-thread-mcp waiting --stdin --reason=\"権限確認待ち\""
           }
         ]
       }
@@ -399,7 +404,7 @@ Claude Code の Hooks 機能と組み合わせて、自動的に Slack 通知を
         "hooks": [
           {
             "type": "command",
-            "command": "npx slack-thread-mcp update --job-id=${CLAUDE_SESSION_ID:-default} --message=\"応答完了\" --level=debug"
+            "command": "npx slack-thread-mcp update --stdin --message=\"応答完了\" --level=debug"
           }
         ]
       }
@@ -409,7 +414,7 @@ Claude Code の Hooks 機能と組み合わせて、自動的に Slack 通知を
         "hooks": [
           {
             "type": "command",
-            "command": "npx slack-thread-mcp complete --job-id=${CLAUDE_SESSION_ID:-default} --summary=\"Session completed\""
+            "command": "npx slack-thread-mcp complete --stdin --summary=\"Session completed\""
           }
         ]
       }
@@ -419,18 +424,33 @@ Claude Code の Hooks 機能と組み合わせて、自動的に Slack 通知を
 ```
 
 **ポイント:**
-- `SessionStart` フックで stdin から `session_id` を抽出し、`CLAUDE_SESSION_ID` 環境変数として永続化します
-- `SessionStart` フックでプロジェクトの `.env` ファイルも読み込み、環境変数をセッション全体で利用可能にします
-- `UserPromptSubmit` フックでユーザー入力時にスレッドを作成します（冪等性により同一セッションでは再利用）
-  - フォールバックとして `uuidgen` を使用し、並列実行時も一意のジョブIDを保証します
+- `--stdin` オプションで Claude Code から渡される JSON データ（session_id など）を自動的に受け取ります
+- `--save-env` オプションで session_id を環境変数として保存し、以降のフックで利用可能にします
+- `SessionStart` フックでスレッドを作成します（冪等性により同一セッションでは再利用）
+- `UserPromptSubmit` フックでユーザー入力時に進捗を通知します
 - `PostToolUse` フックでツール実行後に進捗を通知します（`matcher: "*"` で全ツールにマッチ）
-  - stdin から `tool_name` を取得して通知メッセージに含めます
-- `PermissionRequest` フックで権限確認待ち時にメンション付きで通知します
+- `Notification` フックで権限確認待ち時にメンション付きで通知します
 - `Stop` フックで各応答完了時に進捗更新します（`complete` ではなく `update` を使用）
 - `SessionEnd` フックでセッション終了時に完了通知を送信します
-- `.env` ファイルには `SLACK_BOT_TOKEN`、`SLACK_DEFAULT_CHANNEL`、`THREAD_STATE_PATH` などを設定してください
 
-**注意:** `jq` コマンドが必要です。macOS では `brew install jq`、Linux では `apt install jq` でインストールできます
+**環境変数の設定:**
+
+`.claude/settings.local.json` の `env` セクションで環境変数を設定できます:
+
+```json
+{
+  "env": {
+    "SLACK_BOT_TOKEN": "xoxb-your-token",
+    "SLACK_DEFAULT_CHANNEL": "C0123456789"
+  },
+  "permissions": {
+    "allow": ["Bash(npx slack-thread-mcp *)"]
+  },
+  "hooks": {
+    ...
+  }
+}
+```
 
 ## 開発
 
