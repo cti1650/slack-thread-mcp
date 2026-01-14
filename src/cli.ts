@@ -296,9 +296,29 @@ async function parseArgs(args: string[]): Promise<{ command: string; options: Re
           debug("stdin", "Using session_id as job-id", { jobId: stdinData.session_id });
         }
 
-        // tool_nameがあればメッセージに使用可能
-        if (stdinData.tool_name && !options.message) {
+        // hook_event_nameを内部オプションとして保存
+        if (stdinData.hook_event_name) {
+          options["_hook_event"] = stdinData.hook_event_name;
+        }
+
+        // tool_nameがあれば内部オプションとして保存
+        if (stdinData.tool_name) {
           options["_tool_name"] = stdinData.tool_name;
+        }
+
+        // notification_typeがあれば内部オプションとして保存
+        if (stdinData.notification_type) {
+          options["_notification_type"] = stdinData.notification_type;
+        }
+
+        // promptがあれば内部オプションとして保存（UserPromptSubmit用）
+        if (stdinData.prompt) {
+          options["_prompt"] = stdinData.prompt;
+        }
+
+        // cwdがあれば内部オプションとして保存
+        if (stdinData.cwd) {
+          options["_cwd"] = stdinData.cwd;
         }
       } catch (error) {
         debug("stdin", "Failed to parse stdin as JSON", { error: String(error) });
@@ -534,7 +554,13 @@ async function main(): Promise<void> {
       case "update": {
         debug("cmd:update", "Processing update command", { jobId, message: options.message, level: options.level });
 
-        const message = options.message;
+        // メッセージの生成: --message > tool_name自動生成 > エラー
+        let message = options.message;
+        if (!message && options["_tool_name"]) {
+          // PostToolUseイベントでtool_nameがある場合は自動生成
+          message = `Tool: ${options["_tool_name"]}`;
+          debug("cmd:update", "Auto-generated message from tool_name", { toolName: options["_tool_name"] });
+        }
         if (!message) {
           console.error("Error: --message is required for update command");
           process.exit(1);
@@ -611,7 +637,22 @@ async function main(): Promise<void> {
           break;
         }
 
-        const reason = options.reason || "Waiting for permission or user input";
+        // reasonの生成: --reason > notification_type自動生成 > デフォルト
+        let reason = options.reason;
+        if (!reason && options["_notification_type"]) {
+          // Notificationイベントでnotification_typeがある場合は自動生成
+          const typeMap: Record<string, string> = {
+            "permission_prompt": "権限確認待ち",
+            "idle_prompt": "アイドル状態",
+            "auth_success": "認証成功",
+            "elicitation_dialog": "追加情報の入力待ち",
+          };
+          reason = typeMap[options["_notification_type"]] || options["_notification_type"];
+          debug("cmd:waiting", "Auto-generated reason from notification_type", { notificationType: options["_notification_type"] });
+        }
+        if (!reason) {
+          reason = "Waiting for permission or user input";
+        }
         debug("cmd:waiting", "Posting waiting message", { targetChannel, targetThreadTs, title, reason, mention });
 
         const result = await slackClient.postWaiting(
