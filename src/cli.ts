@@ -211,10 +211,43 @@ function readStdin(): Promise<string> {
   });
 }
 
+// Claude Code hooks から渡されるJSONデータの型定義
+// https://code.claude.com/docs/en/hooks
 interface StdinData {
+  // 共通フィールド（すべてのフックイベント）
   session_id?: string;
+  transcript_path?: string;
+  cwd?: string;
+  permission_mode?: "default" | "plan" | "acceptEdits" | "dontAsk" | "bypassPermissions";
+  hook_event_name?: "PreToolUse" | "PostToolUse" | "Notification" | "Stop" | "SubagentStop" | "PreCompact" | "SessionStart" | "SessionEnd" | "UserPromptSubmit";
+
+  // PreToolUse / PostToolUse 固有
   tool_name?: string;
   tool_input?: Record<string, unknown>;
+  tool_response?: Record<string, unknown>;
+  tool_use_id?: string;
+
+  // Notification 固有
+  message?: string;
+  notification_type?: "permission_prompt" | "idle_prompt" | "auth_success" | "elicitation_dialog";
+
+  // UserPromptSubmit 固有
+  prompt?: string;
+
+  // Stop / SubagentStop 固有
+  stop_hook_active?: boolean;
+
+  // SessionStart 固有
+  source?: "startup" | "resume" | "clear" | "compact";
+
+  // SessionEnd 固有
+  reason?: "clear" | "logout" | "prompt_input_exit" | "other";
+
+  // PreCompact 固有
+  trigger?: "manual" | "auto";
+  custom_instructions?: string;
+
+  // その他のフィールド
   [key: string]: unknown;
 }
 
