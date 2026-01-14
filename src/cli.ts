@@ -617,18 +617,24 @@ async function main(): Promise<void> {
       case "update": {
         debug("cmd:update", "Processing update command", { jobId, message: options.message, level: options.level, hookEvent });
 
-        // upsertモード: PostToolUseイベント時はメッセージを上書き
-        const useUpsert = options.upsert === "true" || isPostToolUse;
+        // upsertモード: PostToolUseイベント時のみメッセージを上書き
+        // 明示的に--upsert=trueが指定された場合も上書き
+        let useUpsert = options.upsert === "true" || isPostToolUse;
 
         // メッセージの生成: --message > prompt自動生成 > tool詳細自動生成 > エラー
         let message = options.message;
 
         // UserPromptSubmitイベントでpromptがある場合は自動生成
+        // 新しいプロンプトなので新しいメッセージを投稿（上書きしない）
         if (!message && hookEvent === "UserPromptSubmit" && options["_prompt"]) {
           const prompt = options["_prompt"];
           const truncated = prompt.length > 100 ? prompt.slice(0, 100) + "..." : prompt;
           message = `*Prompt:* ${truncated}`;
           debug("cmd:update", "Auto-generated message from prompt", { promptLength: prompt.length });
+          // UserPromptSubmitでは新しいメッセージを投稿するため、upsertを無効化しProgressMessageTsをクリア
+          useUpsert = false;
+          threadStore.clearProgressMessageTs(jobId);
+          debug("cmd:update", "Cleared progressMessageTs for new prompt (upsert disabled)");
         }
 
         // PostToolUseイベントでtool_nameがある場合は詳細情報を含めて自動生成
@@ -662,6 +668,7 @@ async function main(): Promise<void> {
         }
 
         // Stopイベントでtranscript_pathがある場合は応答内容を取得
+        // Stopイベントは応答完了を示すので、新しいメッセージを投稿（上書きしない）
         if (!message && hookEvent === "Stop" && options["_transcript_path"]) {
           const lastResponse = getLastAssistantResponse(options["_transcript_path"]);
           if (lastResponse) {
@@ -671,6 +678,10 @@ async function main(): Promise<void> {
             message = "応答完了";
             debug("cmd:update", "Using default message (no response found in transcript)");
           }
+          // Stopイベントでは新しいメッセージを投稿するため、upsertを無効化しProgressMessageTsをクリア
+          useUpsert = false;
+          threadStore.clearProgressMessageTs(jobId);
+          debug("cmd:update", "Cleared progressMessageTs for Stop event (upsert disabled)");
         }
 
         if (!message) {
