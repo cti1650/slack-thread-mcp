@@ -167,11 +167,13 @@ export class SlackClient {
     channel: string,
     threadTs: string,
     message: string,
-    level: "info" | "warn" | "debug" = "info"
+    level: "info" | "warn" | "debug" = "info",
+    mention: boolean = false
   ): Promise<ReplyResult> {
     const emoji =
       level === "warn" ? "⚠️" : level === "debug" ? "🔍" : "⏳";
-    const text = `${emoji} ${message}`;
+    const mentionText = mention ? this.formatMention() : "";
+    const text = `${emoji} ${message}${mentionText ? `\n\n${mentionText}` : ""}`;
 
     const result = await this.client.chat.postMessage({
       channel,

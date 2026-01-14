@@ -102,6 +102,10 @@ export function slackThreadTools(
         .enum(["info", "warn", "debug"])
         .optional()
         .describe("メッセージレベル（デフォルト: info）"),
+      mention: z
+        .boolean()
+        .optional()
+        .describe("メンションを行うか（デフォルト: false）"),
       enable_waiting_monitor: z
         .boolean()
         .optional()
@@ -111,7 +115,7 @@ export function slackThreadTools(
         .optional()
         .describe("権限確認待ち通知までの時間（ミリ秒、デフォルト: 30000）"),
     }),
-    execute: async ({ job_id, message, thread_ts, level, enable_waiting_monitor, waiting_timeout_ms }) => {
+    execute: async ({ job_id, message, thread_ts, level, mention, enable_waiting_monitor, waiting_timeout_ms }) => {
       const state = threadStore.get(job_id);
 
       // thread_ts が指定されていればそちらを優先、なければ state から取得
@@ -150,7 +154,8 @@ export function slackThreadTools(
         targetChannel,
         targetThreadTs,
         message,
-        level || "info"
+        level || "info",
+        mention === true
       );
 
       // 権限確認待ち監視を開始（デフォルトで有効）

@@ -474,7 +474,14 @@ async function main(): Promise<void> {
   });
 
   const channel = options.channel || config.slackDefaultChannel;
-  const mention = options.mention !== "false";
+  // メンションのデフォルト:
+  // - start: true
+  // - update: true（ただしPostToolUseイベントはfalse）
+  // - それ以外: false
+  const hookEvent = options["_hook_event"];
+  const isPostToolUse = hookEvent === "PostToolUse";
+  const mentionDefault = command === "start" || (command === "update" && !isPostToolUse);
+  const mention = options.mention === "true" ? true : options.mention === "false" ? false : mentionDefault;
 
   debug("main", "Execution context", { jobId, channel, mention, command });
 
@@ -595,13 +602,14 @@ async function main(): Promise<void> {
         }
 
         const level = (options.level || "info") as "info" | "warn" | "debug";
-        debug("cmd:update", "Posting thread reply", { targetChannel, targetThreadTs, level });
+        debug("cmd:update", "Posting thread reply", { targetChannel, targetThreadTs, level, mention });
 
         const result = await slackClient.postThreadReply(
           targetChannel,
           targetThreadTs,
           message,
-          level
+          level,
+          mention
         );
 
         debug("cmd:update", "Slack API response", { ok: result.ok });
