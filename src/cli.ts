@@ -559,14 +559,41 @@ async function main(): Promise<void> {
       }
 
       case "update": {
-        debug("cmd:update", "Processing update command", { jobId, message: options.message, level: options.level });
+        debug("cmd:update", "Processing update command", { jobId, message: options.message, level: options.level, hookEvent });
 
-        // メッセージの生成: --message > tool_name自動生成 > エラー
+        // upsertモード: PostToolUseイベント時はメッセージを上書き
+        const useUpsert = options.upsert === "true" || isPostToolUse;
+
+        // メッセージの生成: --message > tool詳細自動生成 > エラー
         let message = options.message;
-        if (!message && options["_tool_name"]) {
-          // PostToolUseイベントでtool_nameがある場合は自動生成
-          message = `Tool: ${options["_tool_name"]}`;
-          debug("cmd:update", "Auto-generated message from tool_name", { toolName: options["_tool_name"] });
+        if (!message && stdinData?.tool_name) {
+          // PostToolUseイベントでtool_nameがある場合は詳細情報を含めて自動生成
+          const toolName = stdinData.tool_name;
+          const toolInput = stdinData.tool_input;
+
+          // ツール別に詳細情報を生成
+          let details = "";
+          if (toolInput) {
+            if (toolName === "Read" && toolInput.file_path) {
+              details = `\`${toolInput.file_path}\``;
+            } else if (toolName === "Write" && toolInput.file_path) {
+              details = `\`${toolInput.file_path}\``;
+            } else if (toolName === "Edit" && toolInput.file_path) {
+              details = `\`${toolInput.file_path}\``;
+            } else if (toolName === "Bash" && toolInput.command) {
+              const cmd = String(toolInput.command);
+              details = `\`${cmd.length > 50 ? cmd.slice(0, 50) + "..." : cmd}\``;
+            } else if (toolName === "Glob" && toolInput.pattern) {
+              details = `\`${toolInput.pattern}\``;
+            } else if (toolName === "Grep" && toolInput.pattern) {
+              details = `\`${toolInput.pattern}\``;
+            } else if (toolName === "Task" && toolInput.description) {
+              details = String(toolInput.description);
+            }
+          }
+
+          message = details ? `*${toolName}*: ${details}` : `*${toolName}*`;
+          debug("cmd:update", "Auto-generated message from tool details", { toolName, details });
         }
         if (!message) {
           console.error("Error: --message is required for update command");
@@ -582,6 +609,7 @@ async function main(): Promise<void> {
           stateFound: !!state,
           targetThreadTs,
           targetChannel,
+          useUpsert,
         });
 
         if (!targetThreadTs) {
@@ -602,18 +630,28 @@ async function main(): Promise<void> {
         }
 
         const level = (options.level || "info") as "info" | "warn" | "debug";
-        debug("cmd:update", "Posting thread reply", { targetChannel, targetThreadTs, level, mention });
 
-        const result = await slackClient.postThreadReply(
+        // upsertモードの場合は既存メッセージを上書き
+        const existingMessageTs = useUpsert ? threadStore.getProgressMessageTs(jobId) : undefined;
+        debug("cmd:update", "Posting thread reply", { targetChannel, targetThreadTs, level, mention, useUpsert, existingMessageTs });
+
+        const result = await slackClient.upsertThreadReply(
           targetChannel,
           targetThreadTs,
           message,
           level,
-          mention
+          mention,
+          existingMessageTs
         );
 
-        debug("cmd:update", "Slack API response", { ok: result.ok });
-        console.log(JSON.stringify({ ok: result.ok }));
+        // 投稿したメッセージのtsを保存（次回の上書き用）
+        if (result.ok && result.ts && useUpsert) {
+          threadStore.updateProgressMessageTs(jobId, result.ts);
+          debug("cmd:update", "Saved progress message ts", { ts: result.ts });
+        }
+
+        debug("cmd:update", "Slack API response", { ok: result.ok, ts: result.ts });
+        console.log(JSON.stringify({ ok: result.ok, ts: result.ts }));
         break;
       }
 

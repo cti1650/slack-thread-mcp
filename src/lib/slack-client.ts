@@ -188,6 +188,50 @@ export class SlackClient {
     };
   }
 
+  /**
+   * 既存メッセージを更新（upsert: messageTs があれば更新、なければ新規投稿）
+   */
+  async upsertThreadReply(
+    channel: string,
+    threadTs: string,
+    message: string,
+    level: "info" | "warn" | "debug" = "info",
+    mention: boolean = false,
+    messageTs?: string
+  ): Promise<ReplyResult> {
+    const emoji =
+      level === "warn" ? "⚠️" : level === "debug" ? "🔍" : "⏳";
+    const mentionText = mention ? this.formatMention() : "";
+    const text = `${emoji} ${message}${mentionText ? `\n\n${mentionText}` : ""}`;
+
+    if (messageTs) {
+      // 既存メッセージを更新
+      const result = await this.client.chat.update({
+        channel,
+        ts: messageTs,
+        text,
+      });
+
+      return {
+        ok: result.ok ?? false,
+        ts: result.ts,
+      };
+    } else {
+      // 新規投稿
+      const result = await this.client.chat.postMessage({
+        channel,
+        thread_ts: threadTs,
+        text,
+        mrkdwn: true,
+      });
+
+      return {
+        ok: result.ok ?? false,
+        ts: result.ts,
+      };
+    }
+  }
+
   async postComplete(
     channel: string,
     threadTs: string,

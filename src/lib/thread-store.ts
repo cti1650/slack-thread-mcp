@@ -12,6 +12,7 @@ export interface ThreadState {
   createdAt: string;
   updatedAt: string;
   permalink?: string;
+  progressMessageTs?: string; // 最新の進捗メッセージのts（上書き用）
 }
 
 interface DebounceEntry {
@@ -113,6 +114,46 @@ export class ThreadStore {
     this.saveToDisk();
 
     return true;
+  }
+
+  /**
+   * 進捗メッセージのtsを更新
+   */
+  updateProgressMessageTs(jobId: string, messageTs: string): boolean {
+    const state = this.threads.get(jobId);
+    if (!state) {
+      return false;
+    }
+
+    state.progressMessageTs = messageTs;
+    state.updatedAt = new Date().toISOString();
+    this.saveToDisk();
+
+    return true;
+  }
+
+  /**
+   * 進捗メッセージのtsをクリア（新しいメッセージを投稿させる）
+   */
+  clearProgressMessageTs(jobId: string): boolean {
+    const state = this.threads.get(jobId);
+    if (!state) {
+      return false;
+    }
+
+    delete state.progressMessageTs;
+    state.updatedAt = new Date().toISOString();
+    this.saveToDisk();
+
+    return true;
+  }
+
+  /**
+   * 進捗メッセージのtsを取得
+   */
+  getProgressMessageTs(jobId: string): string | undefined {
+    const state = this.threads.get(jobId);
+    return state?.progressMessageTs;
   }
 
   isTerminal(jobId: string): boolean {

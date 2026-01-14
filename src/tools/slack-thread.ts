@@ -106,6 +106,10 @@ export function slackThreadTools(
         .boolean()
         .optional()
         .describe("メンションを行うか（デフォルト: false）"),
+      upsert: z
+        .boolean()
+        .optional()
+        .describe("既存の進捗メッセージを上書きするか（デフォルト: false）"),
       enable_waiting_monitor: z
         .boolean()
         .optional()
@@ -115,7 +119,7 @@ export function slackThreadTools(
         .optional()
         .describe("権限確認待ち通知までの時間（ミリ秒、デフォルト: 30000）"),
     }),
-    execute: async ({ job_id, message, thread_ts, level, mention, enable_waiting_monitor, waiting_timeout_ms }) => {
+    execute: async ({ job_id, message, thread_ts, level, mention, upsert, enable_waiting_monitor, waiting_timeout_ms }) => {
       const state = threadStore.get(job_id);
 
       // thread_ts が指定されていればそちらを優先、なければ state から取得
@@ -147,16 +151,21 @@ export function slackThreadTools(
         threadStore.updateStatus(job_id, "in_progress");
       }
 
-      // debounce処理（即時実行版）
-      // 実際のdebounceはthreadStoreのscheduleUpdateで可能だが、
-      // MCPツールは同期的に結果を返す必要があるため、ここでは即時投稿
-      const result = await slackClient.postThreadReply(
+      // upsertモードの場合は既存メッセージを上書き
+      const existingMessageTs = upsert ? threadStore.getProgressMessageTs(job_id) : undefined;
+      const result = await slackClient.upsertThreadReply(
         targetChannel,
         targetThreadTs,
         message,
         level || "info",
-        mention === true
+        mention === true,
+        existingMessageTs
       );
+
+      // 投稿したメッセージのtsを保存（次回の上書き用）
+      if (result.ok && result.ts && upsert) {
+        threadStore.updateProgressMessageTs(job_id, result.ts);
+      }
 
       // 権限確認待ち監視を開始（デフォルトで有効）
       if (enable_waiting_monitor !== false) {
