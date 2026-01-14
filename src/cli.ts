@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, appendFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 import { SlackClient } from "./lib/slack-client.js";
@@ -191,19 +191,121 @@ function resolveConfig(): Config {
   return resolvedConfig;
 }
 
-function parseArgs(args: string[]): { command: string; options: Record<string, string> } {
+function readStdin(): Promise<string> {
+  return new Promise((resolve) => {
+    let data = "";
+    process.stdin.setEncoding("utf-8");
+    process.stdin.on("data", (chunk) => {
+      data += chunk;
+    });
+    process.stdin.on("end", () => {
+      resolve(data.trim());
+    });
+    // タイムアウト: 100ms以内にデータがなければ空文字を返す
+    setTimeout(() => {
+      if (data === "") {
+        process.stdin.removeAllListeners();
+        resolve("");
+      }
+    }, 100);
+  });
+}
+
+interface StdinData {
+  session_id?: string;
+  tool_name?: string;
+  tool_input?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+async function parseArgs(args: string[]): Promise<{ command: string; options: Record<string, string>; stdinData: StdinData | null }> {
   const command = args[0] || "help";
   const options: Record<string, string> = {};
+  let stdinData: StdinData | null = null;
+
+  // --stdinオプションがあるか確認
+  const useStdin = args.includes("--stdin");
 
   for (let i = 1; i < args.length; i++) {
     const arg = args[i];
-    if (arg.startsWith("--")) {
+    if (arg.startsWith("--") && arg !== "--stdin") {
       const [key, ...valueParts] = arg.slice(2).split("=");
       options[key] = valueParts.join("=") || "true";
     }
   }
 
-  return { command, options };
+  // --stdinオプションがある場合、標準入力からJSONを読み取る
+  if (useStdin) {
+    debug("stdin", "Reading from stdin");
+    const stdinContent = await readStdin();
+    debug("stdin", "Stdin content", { content: stdinContent });
+
+    if (stdinContent) {
+      try {
+        stdinData = JSON.parse(stdinContent) as StdinData;
+        debug("stdin", "Parsed stdin JSON", stdinData);
+
+        // session_idがあればjob-idとして使用（オプションで上書きされていなければ）
+        if (stdinData.session_id && !options["job-id"]) {
+          options["job-id"] = stdinData.session_id;
+          debug("stdin", "Using session_id as job-id", { jobId: stdinData.session_id });
+        }
+
+        // tool_nameがあればメッセージに使用可能
+        if (stdinData.tool_name && !options.message) {
+          options["_tool_name"] = stdinData.tool_name;
+        }
+      } catch (error) {
+        debug("stdin", "Failed to parse stdin as JSON", { error: String(error) });
+      }
+    }
+  }
+
+  // --save-envオプションがある場合、環境変数をCLAUDE_ENV_FILEに保存
+  const saveEnv = args.includes("--save-env");
+  if (saveEnv) {
+    const envFile = process.env.CLAUDE_ENV_FILE;
+    if (envFile) {
+      try {
+        const envLines: string[] = [];
+
+        // job-idを保存
+        if (options["job-id"]) {
+          envLines.push(`SLACK_THREAD_JOB_ID=${options["job-id"]}`);
+        }
+
+        // Slack関連の環境変数を保存（既に設定されていれば）
+        const slackEnvVars = [
+          "SLACK_BOT_TOKEN",
+          "SLACK_DEFAULT_CHANNEL",
+          "SLACK_MENTION_USER_IDS",
+          "SLACK_MENTION_GROUP_ID",
+          "SLACK_POST_PREFIX",
+          "THREAD_STATE_PATH",
+        ];
+
+        for (const varName of slackEnvVars) {
+          if (process.env[varName]) {
+            envLines.push(`${varName}=${process.env[varName]}`);
+          }
+        }
+
+        if (envLines.length > 0) {
+          appendFileSync(envFile, envLines.join("\n") + "\n");
+          debug("save-env", "Saved environment variables to CLAUDE_ENV_FILE", {
+            envFile,
+            savedVars: envLines.map(l => l.split("=")[0]),
+          });
+        }
+      } catch (error) {
+        debug("save-env", "Failed to save to CLAUDE_ENV_FILE", { error: String(error) });
+      }
+    } else {
+      debug("save-env", "CLAUDE_ENV_FILE not set, skipping save");
+    }
+  }
+
+  return { command, options, stdinData };
 }
 
 function printUsage(): void {
@@ -219,7 +321,10 @@ Commands:
   help      Show this help message
 
 Options:
-  --job-id=<id>       Job identifier (required for all commands)
+  --stdin             Read JSON from stdin (for Claude Code hooks)
+                      Automatically extracts session_id as job-id
+  --save-env          Save job-id and Slack config to CLAUDE_ENV_FILE
+  --job-id=<id>       Job identifier (or use --stdin / SLACK_THREAD_JOB_ID)
   --title=<title>     Job title (required for start)
   --message=<msg>     Progress message (required for update)
   --level=<level>     Message level: info, warn, debug (default: info)
@@ -238,15 +343,22 @@ Environment Variables:
   SLACK_MENTION_GROUP_ID  Group ID to mention
   SLACK_POST_PREFIX       Prefix for all messages
   THREAD_STATE_PATH       Path to persist thread state
+  SLACK_THREAD_JOB_ID     Default job-id (set by --save-env in SessionStart)
 
 Global Config:
   ~/.config/slack-thread-mcp/config.json
   ~/.slack-thread-mcp.json
 
 Examples:
+  # Standard usage
   slack-thread-mcp start --job-id=abc123 --title="Deploy to production"
   slack-thread-mcp update --job-id=abc123 --message="Building..."
   slack-thread-mcp complete --job-id=abc123 --summary="Deployed successfully"
+
+  # Claude Code hooks (SessionStart saves job-id, others auto-use it)
+  slack-thread-mcp start --stdin --save-env --title="Task"  # SessionStart
+  slack-thread-mcp update --message="Running"                # Uses SLACK_THREAD_JOB_ID
+  slack-thread-mcp complete --summary="Done"                 # Uses SLACK_THREAD_JOB_ID
 `);
 }
 
@@ -259,9 +371,9 @@ async function main(): Promise<void> {
   });
 
   const args = process.argv.slice(2);
-  const { command, options } = parseArgs(args);
+  const { command, options, stdinData } = await parseArgs(args);
 
-  debug("main", "Parsed arguments", { command, options, rawArgs: args });
+  debug("main", "Parsed arguments", { command, options, stdinData, rawArgs: args });
 
   if (command === "help" || args.includes("--help") || args.includes("-h")) {
     printUsage();
@@ -282,12 +394,19 @@ async function main(): Promise<void> {
   debug("main", "Creating ThreadStore", { statePath: config.threadStatePath });
   const threadStore = new ThreadStore(config.threadStatePath);
 
-  const jobId = options["job-id"];
-  if (!jobId && command !== "help") {
-    console.error("Error: --job-id is required");
+  // job-idの解決: オプション > 環境変数SLACK_THREAD_JOB_ID
+  const jobIdResolved = options["job-id"] || process.env.SLACK_THREAD_JOB_ID;
+  if (!jobIdResolved && command !== "help") {
+    console.error("Error: --job-id is required (or set SLACK_THREAD_JOB_ID)");
     debug("main", "Missing job-id - exiting");
     process.exit(1);
   }
+  const jobId = jobIdResolved as string;  // 上記でexitしているため安全
+  debug("main", "Resolved job-id", {
+    fromOption: options["job-id"],
+    fromEnv: process.env.SLACK_THREAD_JOB_ID,
+    resolved: jobId,
+  });
 
   const channel = options.channel || config.slackDefaultChannel;
   const mention = options.mention !== "false";
