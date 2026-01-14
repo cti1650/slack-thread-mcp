@@ -25,7 +25,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx slack-thread-mcp update --stdin --message=\"プロンプト受信\""
+            "command": "npx slack-thread-mcp update --stdin"
           }
         ]
       }
@@ -36,7 +36,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx slack-thread-mcp update --stdin --message=\"ツール実行完了\""
+            "command": "npx slack-thread-mcp update --stdin"
           }
         ]
       }
@@ -47,7 +47,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx slack-thread-mcp waiting --stdin --reason=\"権限確認待ち\""
+            "command": "npx slack-thread-mcp waiting --stdin"
           }
         ]
       }
@@ -57,7 +57,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx slack-thread-mcp update --stdin --message=\"応答完了\" --level=debug"
+            "command": "npx slack-thread-mcp update --stdin --level=debug"
           }
         ]
       }
