@@ -238,7 +238,19 @@ async function parseArgs(args: string[]): Promise<{ command: string; options: Re
   if (useStdin) {
     debug("stdin", "Reading from stdin");
     const stdinContent = await readStdin();
-    debug("stdin", "Stdin content", { content: stdinContent });
+    debug("stdin", "Stdin content (raw)", { content: stdinContent });
+
+    // デバッグ用: 標準入力の内容をファイルに出力
+    const debugLogPath = process.env.SLACK_THREAD_STDIN_LOG;
+    if (debugLogPath) {
+      try {
+        const timestamp = new Date().toISOString();
+        const logEntry = `[${timestamp}] command=${command} stdin=${stdinContent}\n`;
+        appendFileSync(debugLogPath, logEntry);
+      } catch {
+        // ログ出力失敗は無視
+      }
+    }
 
     if (stdinContent) {
       try {
