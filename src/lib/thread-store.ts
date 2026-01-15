@@ -117,6 +117,25 @@ export class ThreadStore {
   }
 
   /**
+   * スレッドのthread_tsを更新（遅延初期化用）
+   */
+  updateThreadTs(jobId: string, threadTs: string, permalink?: string): boolean {
+    const state = this.threads.get(jobId);
+    if (!state) {
+      return false;
+    }
+
+    state.threadTs = threadTs;
+    if (permalink) {
+      state.permalink = permalink;
+    }
+    state.updatedAt = new Date().toISOString();
+    this.saveToDisk();
+
+    return true;
+  }
+
+  /**
    * 進捗メッセージのtsを更新
    */
   updateProgressMessageTs(jobId: string, messageTs: string): boolean {

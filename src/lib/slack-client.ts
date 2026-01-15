@@ -297,7 +297,8 @@ export class SlackClient {
     threadTs: string,
     title: string,
     reason: string,
-    mention: boolean = true
+    mention: boolean = true,
+    messageTs?: string
   ): Promise<ReplyResult> {
     const mentionText = mention ? this.formatMention() : "";
 
@@ -305,17 +306,32 @@ export class SlackClient {
       `⏸️ *Waiting:* ${title}\n${reason}${mentionText ? `\n\n${mentionText}` : ""}`
     );
 
-    const result = await this.client.chat.postMessage({
-      channel,
-      thread_ts: threadTs,
-      text,
-      mrkdwn: true,
-    });
+    if (messageTs) {
+      // 既存メッセージを更新
+      const result = await this.client.chat.update({
+        channel,
+        ts: messageTs,
+        text,
+      });
 
-    return {
-      ok: result.ok ?? false,
-      ts: result.ts,
-    };
+      return {
+        ok: result.ok ?? false,
+        ts: result.ts,
+      };
+    } else {
+      // 新規投稿
+      const result = await this.client.chat.postMessage({
+        channel,
+        thread_ts: threadTs,
+        text,
+        mrkdwn: true,
+      });
+
+      return {
+        ok: result.ok ?? false,
+        ts: result.ts,
+      };
+    }
   }
 
   getDefaultChannel(): string {

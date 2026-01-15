@@ -3,18 +3,22 @@
   "_usage": "このファイルの内容を .claude/settings.json または .claude/settings.local.json にコピーしてください",
   "_env_note": ".env ファイルまたは settings.local.json の env セクションに SLACK設定を配置してください",
   "_how_it_works": [
-    "SessionStartで--save-envにより job-id + Slack設定が環境変数に保存され、以降のフックで自動使用されます",
+    "SessionStartで--silentにより Slack投稿をスキップし、--save-envで job-id を環境変数に保存します",
     "--stdinで標準入力からClaude Codeのコンテキスト情報（session_id, prompt, tool_name等）を受け取ります",
     "PostToolUseでは進捗メッセージを上書き更新（upsert）し、スレッドをコンパクトに保ちます",
-    "UserPromptSubmit/Stopでは新しいメッセージを投稿します"
+    "Stop/Notificationでは PostToolUse のメッセージを上書きして最終状態を表示します",
+    "UserPromptSubmitでは新しいメッセージを投稿します"
   ],
   "_message_flow": [
-    "UserPromptSubmit → 新規投稿「Prompt: ...」",
-    "PostToolUse (1回目) → 新規投稿「Read: ...」",
+    "SessionStart → job-idを保存のみ（--silentで投稿しない）",
+    "UserPromptSubmit → 新規投稿「Prompt: ...」← ここで初めてスレッド作成",
+    "PostToolUse (1回目) → 上書き「Read: ...」",
     "PostToolUse (2回目) → 上書き「Edit: ...」",
     "PostToolUse (3回目) → 上書き「Bash: ...」",
-    "Stop → 新規投稿「Response: ...」",
-    "UserPromptSubmit → 新規投稿「Prompt: ...」（次のプロンプト）"
+    "Stop → 上書き「Response: ...」← PostToolUseのメッセージを上書き",
+    "UserPromptSubmit → 新規投稿「Prompt: ...」（次のプロンプト）",
+    "Notification → 上書き「Waiting: ...」← PostToolUseのメッセージを上書き",
+    "SessionEnd → 完了投稿「Done: ...」"
   ],
   "permissions": {
     "allow": [
@@ -29,7 +33,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx slack-thread-mcp start --stdin --save-env --title=\"Claude Code Task\""
+            "command": "npx slack-thread-mcp start --stdin --save-env --silent --title=\"Claude Code Task\""
           }
         ]
       }

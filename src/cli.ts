@@ -446,7 +446,8 @@ Options:
                       Automatically extracts session_id as job-id
   --save-env          Save job-id and Slack config to CLAUDE_ENV_FILE
   --job-id=<id>       Job identifier (or use --stdin / SLACK_THREAD_JOB_ID)
-  --title=<title>     Job title (required for start)
+  --title=<title>     Job title (for start or lazy thread creation)
+  --silent            Don't post to Slack (for start: only save env vars)
   --message=<msg>     Progress message (required for update)
   --level=<level>     Message level: info, warn, debug (default: info)
   --reason=<reason>   Waiting reason (for waiting command)
@@ -481,6 +482,78 @@ Examples:
   slack-thread-mcp update --message="Running"                # Uses SLACK_THREAD_JOB_ID
   slack-thread-mcp complete --summary="Done"                 # Uses SLACK_THREAD_JOB_ID
 `);
+}
+
+// 遅延初期化: スレッドがなければ作成する
+interface LazyInitResult {
+  threadTs: string;
+  channel: string;
+  title: string;
+  created: boolean;
+}
+
+async function ensureThread(
+  jobId: string,
+  threadStore: ThreadStore,
+  slackClient: SlackClient,
+  channel: string,
+  titleOverride?: string,
+  cwdHint?: string,
+  mention: boolean = true
+): Promise<LazyInitResult> {
+  const state = threadStore.get(jobId);
+
+  // 既存のスレッドがあり、thread_tsが設定されている場合はそれを返す
+  if (state?.threadTs) {
+    debug("lazy-init", "Using existing thread", { jobId, threadTs: state.threadTs });
+    return {
+      threadTs: state.threadTs,
+      channel: state.channel,
+      title: state.title,
+      created: false,
+    };
+  }
+
+  // スレッドを作成する必要がある
+  // タイトルの優先順位: オプション指定 > 既存state > cwdから生成 > デフォルト
+  let title = titleOverride || state?.title;
+  if (!title && cwdHint) {
+    // cwdからディレクトリ名を取得
+    const parts = cwdHint.split("/").filter(Boolean);
+    title = parts.length > 0 ? parts[parts.length - 1] : "Claude Code Task";
+  }
+  title = title || "Claude Code Task";
+
+  debug("lazy-init", "Creating thread lazily", { jobId, title, channel });
+
+  const result = await slackClient.postParentMessage(
+    channel,
+    title,
+    undefined,
+    mention
+  );
+
+  if (!result.ok) {
+    throw new Error("Failed to create Slack thread");
+  }
+
+  // スレッド状態を作成または更新
+  if (state) {
+    // 既存のプレースホルダー状態を更新
+    threadStore.updateThreadTs(jobId, result.ts, result.permalink);
+    debug("lazy-init", "Updated placeholder thread state", { jobId, threadTs: result.ts });
+  } else {
+    // 新規作成
+    threadStore.create(jobId, result.channel, result.ts, title, result.permalink);
+    debug("lazy-init", "Created new thread state", { jobId, threadTs: result.ts });
+  }
+
+  return {
+    threadTs: result.ts,
+    channel: result.channel,
+    title,
+    created: true,
+  };
 }
 
 async function main(): Promise<void> {
@@ -544,13 +617,10 @@ async function main(): Promise<void> {
   try {
     switch (command) {
       case "start": {
-        debug("cmd:start", "Processing start command", { jobId, title: options.title });
+        const silent = options.silent === "true" || args.includes("--silent");
+        debug("cmd:start", "Processing start command", { jobId, title: options.title, silent });
 
-        const title = options.title;
-        if (!title) {
-          console.error("Error: --title is required for start command");
-          process.exit(1);
-        }
+        const title = options.title || "Claude Code Task";
 
         // 冪等性: 既存のジョブがあれば再利用
         const existing = threadStore.get(jobId);
@@ -564,6 +634,27 @@ async function main(): Promise<void> {
             thread_ts: existing.threadTs,
             permalink: existing.permalink,
             note: "Reused existing thread",
+          }));
+          break;
+        }
+
+        // silentモード: Slack投稿せずにjob-idの保存のみ（遅延初期化用）
+        if (silent) {
+          debug("cmd:start", "Silent mode - skipping Slack post, only saving job-id");
+          // 最低限のスレッド状態を作成（thread_tsは後で遅延初期化時に設定）
+          const state = threadStore.create(
+            jobId,
+            channel,
+            "",  // thread_tsは空（未作成）
+            title,
+            undefined
+          );
+          debug("cmd:start", "Created placeholder thread state", state);
+          console.log(JSON.stringify({
+            job_id: state.jobId,
+            channel: state.channel,
+            thread_ts: "",
+            note: "Silent mode - thread will be created lazily",
           }));
           break;
         }
@@ -668,7 +759,7 @@ async function main(): Promise<void> {
         }
 
         // Stopイベントでtranscript_pathがある場合は応答内容を取得
-        // Stopイベントは応答完了を示すので、新しいメッセージを投稿（上書きしない）
+        // PostToolUseのメッセージがあれば上書きし、なければ新規投稿
         if (!message && hookEvent === "Stop" && options["_transcript_path"]) {
           const lastResponse = getLastAssistantResponse(options["_transcript_path"]);
           if (lastResponse) {
@@ -678,10 +769,17 @@ async function main(): Promise<void> {
             message = "応答完了";
             debug("cmd:update", "Using default message (no response found in transcript)");
           }
-          // Stopイベントでは新しいメッセージを投稿するため、upsertを無効化しProgressMessageTsをクリア
-          useUpsert = false;
-          threadStore.clearProgressMessageTs(jobId);
-          debug("cmd:update", "Cleared progressMessageTs for Stop event (upsert disabled)");
+          // PostToolUseのメッセージがあれば上書き、なければ新規投稿
+          const existingTs = threadStore.getProgressMessageTs(jobId);
+          if (existingTs) {
+            useUpsert = true;
+            debug("cmd:update", "Stop event will overwrite PostToolUse message", { existingTs });
+          } else {
+            useUpsert = false;
+            debug("cmd:update", "Stop event will create new message (no PostToolUse message)");
+          }
+          // Stopイベント後は新しいプロンプトに備えてクリア
+          // （upsert後にクリアするため、ここではクリアしない）
         }
 
         if (!message) {
@@ -689,44 +787,43 @@ async function main(): Promise<void> {
           process.exit(1);
         }
 
-        const state = threadStore.get(jobId);
-        const targetThreadTs = options["thread-ts"] || state?.threadTs;
-        const targetChannel = state?.channel || channel;
-
-        debug("cmd:update", "Thread lookup", {
+        // 遅延初期化: スレッドがなければ作成
+        const thread = await ensureThread(
           jobId,
-          stateFound: !!state,
-          targetThreadTs,
-          targetChannel,
+          threadStore,
+          slackClient,
+          channel,
+          options.title,
+          options["_cwd"],
+          mention
+        );
+
+        debug("cmd:update", "Thread lookup (lazy init)", {
+          jobId,
+          threadTs: thread.threadTs,
+          channel: thread.channel,
+          created: thread.created,
           useUpsert,
         });
 
-        if (!targetThreadTs) {
-          console.error(`Error: Thread not found for job_id=${jobId}`);
-          debug("cmd:update", "Thread not found - exiting");
-          process.exit(1);
-        }
-
-        if (state && threadStore.isTerminal(jobId)) {
-          debug("cmd:update", "Job already terminated", { status: state.status });
+        if (threadStore.isTerminal(jobId)) {
+          debug("cmd:update", "Job already terminated", { status: threadStore.get(jobId)?.status });
           console.log(JSON.stringify({ ok: false, reason: "Job already terminated" }));
           break;
         }
 
-        if (state) {
-          threadStore.updateStatus(jobId, "in_progress");
-          debug("cmd:update", "Updated job status to in_progress");
-        }
+        threadStore.updateStatus(jobId, "in_progress");
+        debug("cmd:update", "Updated job status to in_progress");
 
         const level = (options.level || "info") as "info" | "warn" | "debug";
 
         // upsertモードの場合は既存メッセージを上書き
         const existingMessageTs = useUpsert ? threadStore.getProgressMessageTs(jobId) : undefined;
-        debug("cmd:update", "Posting thread reply", { targetChannel, targetThreadTs, level, mention, useUpsert, existingMessageTs });
+        debug("cmd:update", "Posting thread reply", { channel: thread.channel, threadTs: thread.threadTs, level, mention, useUpsert, existingMessageTs });
 
         const result = await slackClient.upsertThreadReply(
-          targetChannel,
-          targetThreadTs,
+          thread.channel,
+          thread.threadTs,
           message,
           level,
           mention,
@@ -734,9 +831,15 @@ async function main(): Promise<void> {
         );
 
         // 投稿したメッセージのtsを保存（次回の上書き用）
-        if (result.ok && result.ts && useUpsert) {
-          threadStore.updateProgressMessageTs(jobId, result.ts);
-          debug("cmd:update", "Saved progress message ts", { ts: result.ts });
+        // ただしStopイベントの場合は次のプロンプトに備えてクリア
+        if (result.ok && result.ts) {
+          if (hookEvent === "Stop") {
+            threadStore.clearProgressMessageTs(jobId);
+            debug("cmd:update", "Cleared progressMessageTs after Stop event");
+          } else if (useUpsert) {
+            threadStore.updateProgressMessageTs(jobId, result.ts);
+            debug("cmd:update", "Saved progress message ts", { ts: result.ts });
+          }
         }
 
         debug("cmd:update", "Slack API response", { ok: result.ok, ts: result.ts });
@@ -747,27 +850,27 @@ async function main(): Promise<void> {
       case "waiting": {
         debug("cmd:waiting", "Processing waiting command", { jobId, reason: options.reason });
 
-        const state = threadStore.get(jobId);
-        const targetThreadTs = options["thread-ts"] || state?.threadTs;
-        const targetChannel = state?.channel || channel;
-        const title = state?.title || jobId;
-
-        debug("cmd:waiting", "Thread lookup", {
+        // 遅延初期化: スレッドがなければ作成
+        const thread = await ensureThread(
           jobId,
-          stateFound: !!state,
-          targetThreadTs,
-          targetChannel,
-          title,
+          threadStore,
+          slackClient,
+          channel,
+          options.title,
+          options["_cwd"],
+          mention
+        );
+
+        debug("cmd:waiting", "Thread lookup (lazy init)", {
+          jobId,
+          threadTs: thread.threadTs,
+          channel: thread.channel,
+          title: thread.title,
+          created: thread.created,
         });
 
-        if (!targetThreadTs) {
-          console.error(`Error: Thread not found for job_id=${jobId}`);
-          debug("cmd:waiting", "Thread not found - exiting");
-          process.exit(1);
-        }
-
-        if (state && threadStore.isTerminal(jobId)) {
-          debug("cmd:waiting", "Job already terminated", { status: state.status });
+        if (threadStore.isTerminal(jobId)) {
+          debug("cmd:waiting", "Job already terminated", { status: threadStore.get(jobId)?.status });
           console.log(JSON.stringify({ ok: false, reason: "Job already terminated" }));
           break;
         }
@@ -797,15 +900,32 @@ async function main(): Promise<void> {
         if (!reason) {
           reason = "Waiting for permission or user input";
         }
-        debug("cmd:waiting", "Posting waiting message", { targetChannel, targetThreadTs, title, reason, mention });
+
+        // PostToolUseのメッセージがあれば上書き
+        const existingMessageTs = threadStore.getProgressMessageTs(jobId);
+        debug("cmd:waiting", "Posting waiting message", {
+          channel: thread.channel,
+          threadTs: thread.threadTs,
+          title: thread.title,
+          reason,
+          mention,
+          existingMessageTs,
+        });
 
         const result = await slackClient.postWaiting(
-          targetChannel,
-          targetThreadTs,
-          title,
+          thread.channel,
+          thread.threadTs,
+          thread.title,
           reason,
-          mention
+          mention,
+          existingMessageTs
         );
+
+        // waiting後は次のプロンプトに備えてクリア
+        if (result.ok) {
+          threadStore.clearProgressMessageTs(jobId);
+          debug("cmd:waiting", "Cleared progressMessageTs after waiting");
+        }
 
         debug("cmd:waiting", "Slack API response", { ok: result.ok });
         console.log(JSON.stringify({ ok: result.ok }));
@@ -815,28 +935,28 @@ async function main(): Promise<void> {
       case "complete": {
         debug("cmd:complete", "Processing complete command", { jobId, summary: options.summary });
 
-        const state = threadStore.get(jobId);
-        const targetThreadTs = options["thread-ts"] || state?.threadTs;
-        const targetChannel = state?.channel || channel;
-        const title = state?.title || jobId;
-
-        debug("cmd:complete", "Thread lookup", {
+        // 遅延初期化: スレッドがなければ作成
+        const thread = await ensureThread(
           jobId,
-          stateFound: !!state,
-          targetThreadTs,
-          targetChannel,
-          title,
+          threadStore,
+          slackClient,
+          channel,
+          options.title,
+          options["_cwd"],
+          mention
+        );
+
+        debug("cmd:complete", "Thread lookup (lazy init)", {
+          jobId,
+          threadTs: thread.threadTs,
+          channel: thread.channel,
+          title: thread.title,
+          created: thread.created,
         });
 
-        if (!targetThreadTs) {
-          console.error(`Error: Thread not found for job_id=${jobId}`);
-          debug("cmd:complete", "Thread not found - exiting");
-          process.exit(1);
-        }
-
         // 冪等性: 既に終了済みなら何もしない
-        if (state && threadStore.isTerminal(jobId)) {
-          debug("cmd:complete", "Job already terminated (idempotent)", { status: state.status });
+        if (threadStore.isTerminal(jobId)) {
+          debug("cmd:complete", "Job already terminated (idempotent)", { status: threadStore.get(jobId)?.status });
           console.log(JSON.stringify({ ok: true, note: "Job already terminated" }));
           break;
         }
@@ -851,12 +971,12 @@ async function main(): Promise<void> {
           debug("cmd:complete", "Parsed nextSuggestions", nextSuggestions);
         }
 
-        debug("cmd:complete", "Posting complete message", { targetChannel, targetThreadTs, title, mention });
+        debug("cmd:complete", "Posting complete message", { channel: thread.channel, threadTs: thread.threadTs, title: thread.title, mention });
 
         const result = await slackClient.postComplete(
-          targetChannel,
-          targetThreadTs,
-          title,
+          thread.channel,
+          thread.threadTs,
+          thread.title,
           options.summary,
           nextSuggestions,
           mention
@@ -864,7 +984,7 @@ async function main(): Promise<void> {
 
         debug("cmd:complete", "Slack API response", { ok: result.ok });
 
-        if (result.ok && state) {
+        if (result.ok) {
           threadStore.updateStatus(jobId, "completed");
           debug("cmd:complete", "Updated job status to completed");
         }
@@ -882,38 +1002,38 @@ async function main(): Promise<void> {
           process.exit(1);
         }
 
-        const state = threadStore.get(jobId);
-        const targetThreadTs = options["thread-ts"] || state?.threadTs;
-        const targetChannel = state?.channel || channel;
-        const title = state?.title || jobId;
-
-        debug("cmd:fail", "Thread lookup", {
+        // 遅延初期化: スレッドがなければ作成
+        const thread = await ensureThread(
           jobId,
-          stateFound: !!state,
-          targetThreadTs,
-          targetChannel,
-          title,
+          threadStore,
+          slackClient,
+          channel,
+          options.title,
+          options["_cwd"],
+          mention
+        );
+
+        debug("cmd:fail", "Thread lookup (lazy init)", {
+          jobId,
+          threadTs: thread.threadTs,
+          channel: thread.channel,
+          title: thread.title,
+          created: thread.created,
         });
 
-        if (!targetThreadTs) {
-          console.error(`Error: Thread not found for job_id=${jobId}`);
-          debug("cmd:fail", "Thread not found - exiting");
-          process.exit(1);
-        }
-
         // 冪等性: 既に終了済みなら何もしない
-        if (state && threadStore.isTerminal(jobId)) {
-          debug("cmd:fail", "Job already terminated (idempotent)", { status: state.status });
+        if (threadStore.isTerminal(jobId)) {
+          debug("cmd:fail", "Job already terminated (idempotent)", { status: threadStore.get(jobId)?.status });
           console.log(JSON.stringify({ ok: true, note: "Job already terminated" }));
           break;
         }
 
-        debug("cmd:fail", "Posting fail message", { targetChannel, targetThreadTs, title, errorSummary, mention });
+        debug("cmd:fail", "Posting fail message", { channel: thread.channel, threadTs: thread.threadTs, title: thread.title, errorSummary, mention });
 
         const result = await slackClient.postFail(
-          targetChannel,
-          targetThreadTs,
-          title,
+          thread.channel,
+          thread.threadTs,
+          thread.title,
           errorSummary,
           options["logs-hint"],
           mention
@@ -921,7 +1041,7 @@ async function main(): Promise<void> {
 
         debug("cmd:fail", "Slack API response", { ok: result.ok });
 
-        if (result.ok && state) {
+        if (result.ok) {
           threadStore.updateStatus(jobId, "failed");
           debug("cmd:fail", "Updated job status to failed");
         }

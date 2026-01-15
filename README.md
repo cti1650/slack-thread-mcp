@@ -15,6 +15,7 @@ Claude Code / Claude Desktop から Slack スレッドに進捗通知を送信�
   - ユーザーID/グループID指定時は個別メンション
 - **待機検知**: 権限確認やユーザー入力待ちで処理が停止した場合に自動通知
 - **冪等性**: 同一 job_id の重複呼び出しは既存スレッドを再利用
+- **遅延初期化**: スレッドは最初のSlack投稿時に自動作成（SessionStart時の不要な投稿を削減）
 - **状態永続化**: オプションでスレッド状態をファイルに保存
 
 ## セットアップ
@@ -259,8 +260,11 @@ MCP サーバーの代わりに CLI から直接 Slack に通知を送信でき�
 ### CLI コマンド
 
 ```bash
-# スレッド作成
+# スレッド作成（通常モード - 即座にSlackに投稿）
 npx slack-thread-mcp start --job-id=<id> --title="タスク名"
+
+# スレッド作成（silentモード - 遅延初期化、Slack投稿は後のコマンドで実行）
+npx slack-thread-mcp start --job-id=<id> --silent --title="タスク名"
 
 # 進捗更新
 npx slack-thread-mcp update --job-id=<id> --message="進捗メッセージ"
@@ -284,8 +288,9 @@ npx slack-thread-mcp help
 |-----------|------|
 | `--stdin` | 標準入力から JSON を読み取り（Claude Code Hooks 用） |
 | `--save-env` | job-id と Slack 設定を CLAUDE_ENV_FILE に保存 |
+| `--silent` | Slack投稿をスキップ（start時のみ、遅延初期化用） |
 | `--job-id=<id>` | ジョブID（`--stdin` 使用時は session_id から自動取得） |
-| `--title=<title>` | ジョブタイトル（start時必須） |
+| `--title=<title>` | ジョブタイトル（start時または遅延初期化時） |
 | `--message=<msg>` | 進捗メッセージ（`--stdin` 使用時は自動生成可能） |
 | `--level=<level>` | メッセージレベル: info, warn, debug（デフォルト: info） |
 | `--upsert=<bool>` | 既存メッセージを上書き（PostToolUse時は自動で true） |
@@ -358,7 +363,7 @@ Claude Code の Hooks 機能と組み合わせて、自動的に Slack 通知を
         "hooks": [
           {
             "type": "command",
-            "command": "npx slack-thread-mcp start --stdin --save-env --title=\"Claude Code Task\""
+            "command": "npx slack-thread-mcp start --stdin --save-env --silent --title=\"Claude Code Task\""
           }
         ]
       }
@@ -424,24 +429,29 @@ Claude Code の Hooks 機能と組み合わせて、自動的に Slack 通知を
 `--stdin` オプションを使用すると、Claude Code から渡されるコンテキスト情報を自動的に受け取り、適切なメッセージを生成します。
 
 ```
-UserPromptSubmit → 新規投稿「*Prompt:* ファイルを読んで...」
-PostToolUse (1回目) → 新規投稿「*Read*: `/path/to/file.ts`」
+SessionStart → job-idを保存のみ（--silentで投稿しない）
+UserPromptSubmit → 新規投稿「*Prompt:* ファイルを読んで...」← ここで初めてスレッド作成
+PostToolUse (1回目) → 上書き「*Read*: `/path/to/file.ts`」
 PostToolUse (2回目) → 上書き「*Edit*: `/path/to/file.ts`」
 PostToolUse (3回目) → 上書き「*Bash*: `npm run build`」
-Stop → 新規投稿「*Response:* 変更を完了しました...」
+Stop → 上書き「*Response:* 変更を完了しました...」← PostToolUseのメッセージを上書き
 UserPromptSubmit → 新規投稿「*Prompt:* 次の指示...」（次のプロンプト）
+Notification → 上書き「⏸️ *Waiting:* 権限確認待ち」← PostToolUseのメッセージを上書き
+SessionEnd → 完了投稿「✅ *Done:* Claude Code Task」
 ```
 
 **ポイント:**
 - `--stdin` オプションで Claude Code から渡される JSON データ（session_id, prompt, tool_name 等）を自動的に受け取ります
 - `--save-env` オプションで session_id を環境変数として保存し、以降のフックで利用可能にします
+- **遅延初期化**: `--silent` オプションでSessionStart時のSlack投稿をスキップし、最初のupdate/waiting等で自動的にスレッドを作成します
 - **自動メッセージ生成**: `--message` を省略すると、フックイベントに応じて以下を自動生成:
   - `UserPromptSubmit`: ユーザーのプロンプト内容（100文字まで）
   - `PostToolUse`: ツール名と詳細（ファイルパス、コマンド等）
   - `Stop`: アシスタントの最後の応答（200文字まで）
   - `Notification`: 通知タイプに応じた待機理由
 - **PostToolUse の上書き動作**: 連続する `PostToolUse` は既存メッセージを上書きし、スレッドをコンパクトに保ちます
-- **UserPromptSubmit/Stop は新規投稿**: 新しいプロンプトや応答完了時は新しいメッセージとして投稿します
+- **Stop/Notification は PostToolUse を上書き**: `Stop`（Response）や `Notification`（Waiting）は `PostToolUse` のメッセージを上書きして最終状態を表示
+- **UserPromptSubmit は新規投稿**: 新しいプロンプト時は新しいメッセージとして投稿します
 
 **環境変数の設定:**
 
